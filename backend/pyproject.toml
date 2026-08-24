@@ -1,0 +1,78 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "bioagent-api"
+version = "2.0.0"
+description = "Self-improving LangGraph biomedical research agent API"
+requires-python = ">=3.11"
+dependencies = [
+  "fastapi>=0.115,<1",
+  "uvicorn[standard]>=0.30,<1",
+  "langchain>=0.3,<2",
+  "langchain-text-splitters>=0.3,<2",
+  "langchain-openai>=0.2,<2",
+  "langgraph>=0.2,<2",
+  "numpy>=1.26,<3",
+  "httpx>=0.27,<1",
+  "pydantic-settings>=2.5,<3",
+  "python-multipart>=0.0.9,<1",
+  "pypdf>=5,<7",
+  "pymupdf>=1.26,<2",
+  "pyyaml>=6,<7",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8,<9",
+  "pytest-asyncio>=0.24,<1",
+  "ruff>=0.7,<1",
+]
+training = [
+  "accelerate>=1,<2",
+  "datasets>=3,<5",
+  "peft>=0.14,<1",
+  "transformers>=4.48,<6",
+  "trl>=0.15,<1",
+]
+mac-training = [
+  "mlx-lm[train]>=0.31,<1; sys_platform == 'darwin' and platform_machine == 'arm64'",
+]
+mac-vlm = [
+  "mlx-vlm>=0.6.15,<0.7; sys_platform == 'darwin' and platform_machine == 'arm64'",
+]
+
+[project.scripts]
+biocoder = "biocoder.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = [
+  "app*",
+  "biocoder*",
+  "observability*",
+  "eval*",
+  "feedback*",
+  "data_flywheel*",
+  "training*",
+  "model_registry*",
+  "inference*",
+]
+
+[tool.setuptools.package-data]
+"training.sft" = ["config.yaml", "config.mlx.yaml"]
+"training.dpo" = ["config.yaml"]
+"training.grpo" = ["config.yaml"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+pythonpath = ["."]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+# FastAPI dependency defaults and tool-boundary error conversion are intentional.
+ignore = ["B008", "BLE001"]
