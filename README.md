@@ -66,6 +66,15 @@ BioCoder distinguishes retrieved facts, model inference, conflicting evidence, a
 
 The repository includes SFT and DPO entry points and a GRPO reward scaffold. Training completion does not imply deployment approval: candidate models must pass regression evaluation and human review before promotion.
 
+## Roadmap: scientific multimodal chromatography
+
+BioCoder is planning an LC-MS multimodal workflow under the public project name `ChromPeakFormer`. The proposed system combines extracted-ion chromatogram images, RT-intensity sequences, transition metadata, a specialist peak-analysis tool, and a domain-adapted Qwen3-VL model.
+
+This roadmap is explicitly evidence-gated: tool integration, Qwen3-VL LoRA training, numerical-signal fusion, scientific evaluation, and public metric claims are treated as separate milestones. Planned work is not presented as completed capability.
+
+- [Multimodal architecture and implementation roadmap](MULTIMODAL_ROADMAP.md)
+- [Verification, leakage-control, and ablation plan](MULTIMODAL_TEST_PLAN.md)
+
 ## Roadmap: molecular drug prediction
 
 The next major stage is a dedicated molecular prediction capability. This work is planned and is not part of the current production feature set.
