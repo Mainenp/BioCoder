@@ -151,6 +151,27 @@ python -m multimodal_science.chrompeakformer.execute_cli \
 Successful provenance includes a SHA-256 fingerprint of the private extraction entry point and its
 two mzML-loading helpers, but never stores the private source path.
 
+## Verified ROI/XIC/COCO asset index
+
+The asset-index builder joins each published ROI image and XIC signal row back to exactly one
+derivation-plan `record_id`. It verifies job provenance, output hashes, 400x300 JPEG dimensions,
+native-id label matching, RT windows, and positive peak visibility before writing a training index:
+
+```bash
+python -m multimodal_science.chrompeakformer.index_cli \
+  --plan "<derivation-output>/derivation_plan.jsonl" \
+  --assets-root "<external-asset-root>" \
+  --output-dir "<external-index-root>" \
+  --split train
+```
+
+The command writes `asset_index.jsonl`, `asset_index_report.json`, and one COCO JSON file per
+selected split. Images are referenced relative to the external asset root and are not copied into
+the repository. Negative ROIs remain COCO images without annotations. Positive RT intervals map
+linearly into full-height bounding boxes on the 400x300 ROI. The builder never falls back to label
+row order. Use `--allow-partial` only for an explicitly partial pilot; full builds fail when any
+selected extraction job is missing.
+
 ## Current boundary
 
 This phase creates deterministic splits, hash-verified extraction jobs, a private-source adapter,
