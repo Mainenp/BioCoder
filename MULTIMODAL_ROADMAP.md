@@ -1,7 +1,7 @@
 # BioCoder × ChromPeakFormer Multimodal Roadmap
 
-Status: Phase A manifest and raw-data audit implemented; model training and benchmark results are
-not yet complete.
+Status: Phase A manifest audit, Phase A-plus group splitting, and extraction preflight are
+implemented; ROI extraction, model training, and benchmark results are not yet complete.
 
 ## Verified Phase A snapshot
 
@@ -15,6 +15,23 @@ The first authorized raw-data audit produced dataset version `raw-072fee8e`:
 
 The raw files and generated manifest remain outside Git. The implementation and synthetic contract
 tests are maintained under `backend/multimodal_science/` and `backend/tests/unit/`.
+
+## Verified Phase A-plus snapshot
+
+The leakage-resistant split for `raw-072fee8e` produced:
+
+- 87 train, 11 validation, and 11 internal-test source mzML groups from `traindata3`;
+- 14,355 train, 1,815 validation, and 1,815 internal-test label records;
+- zero split-group overlap, zero content-hash overlap, and zero audit contamination;
+- 8 negative-only auxiliary training records, 132 historical external records, and 132 isolated
+  alternate-label audit records; and
+- deterministic split-manifest SHA-256
+  `30554291c68f7bc32fb7b7c9a954146a02c61cac8ed687aea75ab0cac376cd44`.
+
+The manifest-driven ChromPeakFormer preflight then verified all 134 mzML source hashes and produced
+128 label-driven jobs plus 6 inference-only unlabelled jobs. Its deterministic plan SHA-256 is
+`5fa232787149135935bc62fc75670e8ef58932ccf62186e12082385c257907ab`. The current local runtime is
+missing NumPy, Pandas, SciPy, Matplotlib, and pyOpenMS, so extraction has not been reported as run.
 
 ## Objective
 
