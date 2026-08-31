@@ -86,8 +86,39 @@ python -m multimodal_science.data.derive_cli `
 The report records whether the runtime provides NumPy, Pandas, SciPy, Matplotlib, and pyOpenMS. It
 does not install them. A blocked dependency gate means the plan is valid but extraction has not run.
 
+## Atomic extraction execution
+
+The execution layer accepts a configured ChromPeakFormer callable with the signature
+`extract_job(job, source_mzml, staging_dir)`. The callable writes its outputs only to the supplied
+staging directory:
+
+```powershell
+$env:PYTHONPATH = "backend;<chrompeakformer-python-root>"
+python -m multimodal_science.chrompeakformer.execute_cli `
+  --plan "work/chrompeak/derivation/<dataset-version>/derivation_plan.jsonl" `
+  --data-root "<extracted-data-root>" `
+  --output-root "work/chrompeak/assets/<dataset-version>" `
+  --extractor "your_chrompeakformer_adapter:extract_job" `
+  --split train `
+  --max-jobs 1
+```
+
+Before calling the extractor, the runner verifies the source file hash and the complete scientific
+dependency gate. After extraction it validates:
+
+- required feature and RT-window CSV columns;
+- one non-empty JPEG per RT window;
+- a valid, non-truncated two-dimensional NumPy file without importing NumPy;
+- `feature rows == RT windows == XIC matrix rows - 1`; and
+- at least two RT points in every numerical sequence.
+
+Only a fully valid staging directory is atomically promoted. Repeat runs verify provenance and
+output hashes before returning a cache hit. Dependency, source, tool, and validation failures write
+structured failure records under `failures/` and never publish partial assets.
+
 ## Current boundary
 
-This phase creates deterministic splits and hash-verified extraction jobs, but it does not yet
-generate ROI images, decode numerical chromatogram arrays, train Qwen3-VL, or integrate an agent
-tool. Those remain downstream, evidence-gated milestones in `MULTIMODAL_ROADMAP.md`.
+This phase creates deterministic splits, hash-verified extraction jobs, and an atomic execution
+boundary, but it does not yet generate real ROI images, decode real numerical chromatogram arrays,
+train Qwen3-VL, or integrate an agent tool. Those remain downstream, evidence-gated milestones in
+`MULTIMODAL_ROADMAP.md`.

@@ -33,6 +33,11 @@ The manifest-driven ChromPeakFormer preflight then verified all 134 mzML source 
 `5fa232787149135935bc62fc75670e8ef58932ccf62186e12082385c257907ab`. The current local runtime is
 missing NumPy, Pandas, SciPy, Matplotlib, and pyOpenMS, so extraction has not been reported as run.
 
+The execution boundary is also implemented: it re-verifies source hashes, stages every job in
+isolation, validates CSV/JPEG/NPY cross-file consistency, publishes only through an atomic rename,
+and records structured failure provenance. This is infrastructure evidence only; no real extraction
+claim is allowed until the complete scientific dependency gate passes and a real job is validated.
+
 ## Objective
 
 Extend BioCoder with a reproducible LC-MS scientific multimodal workflow. The planned system will combine extracted-ion chromatogram images, RT-intensity sequences, transition and sample metadata, a specialist chromatographic peak detector, and a domain-adapted Qwen3-VL model.
