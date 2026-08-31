@@ -15,6 +15,7 @@ CHROMPEAKFORMER_REQUIRED_MODULES = (
     "pandas",
     "scipy",
     "matplotlib",
+    "natsort",
     "pyopenms",
 )
 DEFAULT_DERIVATION_SPLITS = frozenset(

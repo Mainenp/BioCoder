@@ -83,8 +83,9 @@ python -m multimodal_science.data.derive_cli `
   --output-dir "work/chrompeak/derivation/<dataset-version>"
 ```
 
-The report records whether the runtime provides NumPy, Pandas, SciPy, Matplotlib, and pyOpenMS. It
-does not install them. A blocked dependency gate means the plan is valid but extraction has not run.
+The report records whether the runtime provides NumPy, Pandas, SciPy, Matplotlib, natsort, and
+pyOpenMS. It does not install them. A blocked dependency gate means the plan is valid but
+extraction has not run.
 
 ## Atomic extraction execution
 

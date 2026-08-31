@@ -5,7 +5,11 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from multimodal_science.data.derivation import build_derivation_plan, dependency_readiness
+from multimodal_science.data.derivation import (
+    CHROMPEAKFORMER_REQUIRED_MODULES,
+    build_derivation_plan,
+    dependency_readiness,
+)
 from multimodal_science.data.manifest import sha256_file
 
 
@@ -43,6 +47,7 @@ class MultimodalDerivationTests(unittest.TestCase):
 
         self.assertTrue(status["json"])
         self.assertFalse(status["module_that_does_not_exist_12345"])
+        self.assertIn("natsort", CHROMPEAKFORMER_REQUIRED_MODULES)
 
     def test_plan_verifies_sources_and_is_deterministic(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
