@@ -58,6 +58,7 @@ include = [
   "training*",
   "model_registry*",
   "inference*",
+  "multimodal_science*",
 ]
 
 [tool.setuptools.package-data]

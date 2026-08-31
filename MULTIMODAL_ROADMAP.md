@@ -1,6 +1,20 @@
 # BioCoder × ChromPeakFormer Multimodal Roadmap
 
-Status: planned; implementation and benchmark results are not yet complete.
+Status: Phase A manifest and raw-data audit implemented; model training and benchmark results are
+not yet complete.
+
+## Verified Phase A snapshot
+
+The first authorized raw-data audit produced dataset version `raw-072fee8e`:
+
+- 134 unique mzML files; all contain chromatogram signals.
+- 18,125 primary eligible label records and 132 isolated alternate-label records.
+- 14,175 positive and 3,950 negative eligible records across 173 components.
+- 25 older mzML files carry recoverable text-encoding warnings; zero files are structurally empty.
+- Repeated generation produced the same manifest SHA-256, confirming deterministic output.
+
+The raw files and generated manifest remain outside Git. The implementation and synthetic contract
+tests are maintained under `backend/multimodal_science/` and `backend/tests/unit/`.
 
 ## Objective
 
