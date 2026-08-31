@@ -11,7 +11,7 @@ import struct
 from collections import Counter, defaultdict
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from multimodal_science.chrompeakformer.outputs import read_npy_metadata, validate_outputs
 from multimodal_science.data.manifest import sha256_file
@@ -390,6 +390,7 @@ def build_asset_index(
     *,
     include_splits: frozenset[str] | None = None,
     allow_partial: bool = False,
+    progress_callback: Callable[[int, int, str], None] | None = None,
 ) -> AssetIndexResult:
     plan_path = plan_path.resolve()
     assets_root = assets_root.resolve()
@@ -425,12 +426,14 @@ def build_asset_index(
 
     assets = []
     annotations_by_split: dict[str, list[dict[str, Any]]] = defaultdict(list)
-    for job, job_dir in completed:
+    for completed_count, (job, job_dir) in enumerate(completed, start=1):
         job_assets, annotations = _verified_job_assets(
             job, job_dir, assets_root, plan_sha256
         )
         assets.extend(job_assets)
         annotations_by_split[str(job["split"])].extend(annotations)
+        if progress_callback is not None:
+            progress_callback(completed_count, len(completed), str(job["job_id"]))
     assets.sort(
         key=lambda item: (
             str(item["split"]),

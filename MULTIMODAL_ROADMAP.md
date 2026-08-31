@@ -1,7 +1,8 @@
 # BioCoder × ChromPeakFormer Multimodal Roadmap
 
-Status: Phase A manifest audit, Phase A-plus group splitting, and extraction preflight are
-implemented; ROI extraction, model training, and benchmark results are not yet complete.
+Status: Phase A manifest audit, Phase A-plus group splitting, and the complete train-plus-validation
+ROI/XIC/COCO build are verified. Internal-test extraction, model training, and benchmark results
+are not yet complete.
 
 ## Verified Phase A snapshot
 
@@ -29,14 +30,28 @@ The leakage-resistant split for `raw-072fee8e` produced:
   `30554291c68f7bc32fb7b7c9a954146a02c61cac8ed687aea75ab0cac376cd44`.
 
 The manifest-driven ChromPeakFormer preflight then verified all 134 mzML source hashes and produced
-128 label-driven jobs plus 6 inference-only unlabelled jobs. Its deterministic plan SHA-256 is
-`5fa232787149135935bc62fc75670e8ef58932ccf62186e12082385c257907ab`. The current local runtime is
-missing NumPy, Pandas, SciPy, Matplotlib, and pyOpenMS, so extraction has not been reported as run.
+128 label-driven jobs plus 6 inference-only unlabelled jobs. Its current deterministic plan
+SHA-256 is `50c1770f77c38d94e141279317d1eaddacf299bf3d199a8e06859792a33ae5f1`.
 
-The execution boundary is also implemented: it re-verifies source hashes, stages every job in
+The execution boundary re-verifies source hashes, stages every job in
 isolation, validates CSV/JPEG/NPY cross-file consistency, publishes only through an atomic rename,
-and records structured failure provenance. This is infrastructure evidence only; no real extraction
-claim is allowed until the complete scientific dependency gate passes and a real job is validated.
+and records structured failure provenance.
+
+## Verified ROI/XIC/COCO snapshot
+
+The authorized CPU extraction run completed all selected train and validation source groups:
+
+- 98/98 source jobs indexed: 87 train and 11 validation, with zero missing jobs;
+- 16,170 aligned ROI image and XIC-sequence assets: 14,355 train and 1,815 validation;
+- 12,679 positive assets and 3,491 negative assets;
+- 12,679 COCO peak annotations, while negative ROIs remain annotation-free images; and
+- deterministic asset-index SHA-256
+  `7afaa48069007458d02ccc1507fb778ec193cab3aad3cbca88d3f608e19b3c0f`.
+
+The build reused five previously verified cache entries and completed the other 93 selected jobs,
+with zero failures and zero staging directories left behind. These counts prove aligned asset
+generation; they are not model-quality or scientific benchmark results. Generated assets and
+absolute execution paths remain outside Git.
 
 ## Objective
 

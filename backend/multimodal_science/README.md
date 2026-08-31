@@ -170,11 +170,13 @@ selected split. Images are referenced relative to the external asset root and ar
 the repository. Negative ROIs remain COCO images without annotations. Positive RT intervals map
 linearly into full-height bounding boxes on the 400x300 ROI. The builder never falls back to label
 row order. Use `--allow-partial` only for an explicitly partial pilot; full builds fail when any
-selected extraction job is missing.
+selected extraction job is missing. Long NFS-backed builds report one verified job at a time to
+standard error while reserving standard output for the final machine-readable JSON result.
 
 ## Current boundary
 
-This phase creates deterministic splits, hash-verified extraction jobs, a private-source adapter,
-and an atomic execution boundary. A real server extraction is still required before claiming ROI
-generation is validated. Qwen3-VL training and agent-tool integration remain downstream,
-evidence-gated milestones in `MULTIMODAL_ROADMAP.md`.
+This phase has produced deterministic splits, hash-verified extraction jobs, a private-source
+adapter, an atomic execution boundary, and a complete train-plus-validation ROI/XIC/COCO index for
+dataset version `raw-072fee8e`. Internal-test extraction, Qwen3-VL training, scientific benchmark
+metrics, and agent-tool integration remain downstream, evidence-gated milestones in
+`MULTIMODAL_ROADMAP.md`.

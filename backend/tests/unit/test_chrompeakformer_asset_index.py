@@ -196,3 +196,20 @@ class ChromPeakFormerAssetIndexTests(unittest.TestCase):
             plan, assets_root, output_dir = self.fixture(root, unmatched=True)
             with self.assertRaisesRegex(ValueError, "No label matches"):
                 build_asset_index(plan, assets_root, output_dir)
+
+    def test_progress_callback_reports_each_verified_job(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            plan, assets_root, output_dir = self.fixture(root)
+            events: list[tuple[int, int, str]] = []
+
+            build_asset_index(
+                plan,
+                assets_root,
+                output_dir,
+                progress_callback=lambda completed, total, job_id: events.append(
+                    (completed, total, job_id)
+                ),
+            )
+
+        self.assertEqual(events, [(1, 1, "0123456789abcdef01234567")])

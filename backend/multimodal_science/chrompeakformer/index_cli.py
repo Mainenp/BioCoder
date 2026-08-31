@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 from pathlib import Path
 
 from multimodal_science.chrompeakformer.asset_index import build_asset_index
@@ -21,12 +22,21 @@ def parser() -> argparse.ArgumentParser:
 
 def main() -> None:
     arguments = parser().parse_args()
+
+    def report_progress(completed: int, total: int, job_id: str) -> None:
+        print(
+            f"[index] verified job {completed}/{total}: {job_id}",
+            file=sys.stderr,
+            flush=True,
+        )
+
     result = build_asset_index(
         arguments.plan,
         arguments.assets_root,
         arguments.output_dir,
         include_splits=frozenset(arguments.splits) if arguments.splits else None,
         allow_partial=arguments.allow_partial,
+        progress_callback=report_progress,
     )
     print(
         json.dumps(
