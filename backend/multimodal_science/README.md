@@ -89,16 +89,21 @@ does not install them. A blocked dependency gate means the plan is valid but ext
 ## Atomic extraction execution
 
 The execution layer accepts a configured ChromPeakFormer callable with the signature
-`extract_job(job, source_mzml, staging_dir)`. The callable writes its outputs only to the supplied
-staging directory:
+`extract_job(job, source_mzml, staging_dir)`. The built-in private adapter loads an authorized
+ChromPeakFormer source tree from an environment variable; private code and absolute paths stay
+outside this repository. The callable writes its outputs only to the supplied staging directory:
 
 ```powershell
-$env:PYTHONPATH = "backend;<chrompeakformer-python-root>"
+$env:PYTHONPATH = "backend"
+$env:CHROMPEAKFORMER_SOURCE_ROOT = "<authorized-private-source-root>"
+$env:CHROMPEAKFORMER_SMOOTH_SIGMA = "1.0"
+$env:MPLBACKEND = "Agg"
+$env:CUDA_VISIBLE_DEVICES = ""
 python -m multimodal_science.chrompeakformer.execute_cli `
   --plan "work/chrompeak/derivation/<dataset-version>/derivation_plan.jsonl" `
   --data-root "<extracted-data-root>" `
   --output-root "work/chrompeak/assets/<dataset-version>" `
-  --extractor "your_chrompeakformer_adapter:extract_job" `
+  --extractor "multimodal_science.chrompeakformer.private_adapter:extract_job" `
   --split train `
   --max-jobs 1
 ```
@@ -116,9 +121,38 @@ Only a fully valid staging directory is atomically promoted. Repeat runs verify 
 output hashes before returning a cache hit. Dependency, source, tool, and validation failures write
 structured failure records under `failures/` and never publish partial assets.
 
+The pinned CPU extraction environment is recorded in
+`chrompeakformer/environment.yml`. Create it with `conda env create --file` on a fresh host, or
+compare its exact versions with an existing environment before running extraction. The adapter
+accepts a private root containing either `model/preprocessing/xic_extraction.py` or
+`preprocessing/xic_extraction.py`. Label-driven jobs fail closed on missing component, channel, or
+RT values; inference jobs deliberately call the source extractor without labels.
+
+On a Linux extraction host, keep the private source and generated assets outside the repository:
+
+```bash
+conda env create --file backend/multimodal_science/chrompeakformer/environment.yml
+conda activate biocoder_chrompeak
+export PYTHONPATH="$PWD/backend"
+export CHROMPEAKFORMER_SOURCE_ROOT="<authorized-private-source-root>"
+export CHROMPEAKFORMER_SMOOTH_SIGMA="1.0"
+export MPLBACKEND="Agg"
+export CUDA_VISIBLE_DEVICES=""
+python -m multimodal_science.chrompeakformer.execute_cli \
+  --plan "<derivation-output>/derivation_plan.jsonl" \
+  --data-root "<extracted-data-root>" \
+  --output-root "<external-asset-root>" \
+  --extractor "multimodal_science.chrompeakformer.private_adapter:extract_job" \
+  --split train \
+  --max-jobs 1
+```
+
+Successful provenance includes a SHA-256 fingerprint of the private extraction entry point and its
+two mzML-loading helpers, but never stores the private source path.
+
 ## Current boundary
 
-This phase creates deterministic splits, hash-verified extraction jobs, and an atomic execution
-boundary, but it does not yet generate real ROI images, decode real numerical chromatogram arrays,
-train Qwen3-VL, or integrate an agent tool. Those remain downstream, evidence-gated milestones in
-`MULTIMODAL_ROADMAP.md`.
+This phase creates deterministic splits, hash-verified extraction jobs, a private-source adapter,
+and an atomic execution boundary. A real server extraction is still required before claiming ROI
+generation is validated. Qwen3-VL training and agent-tool integration remain downstream,
+evidence-gated milestones in `MULTIMODAL_ROADMAP.md`.

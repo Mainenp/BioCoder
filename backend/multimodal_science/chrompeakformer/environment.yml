@@ -1,0 +1,11 @@
+name: biocoder_chrompeak
+channels:
+  - conda-forge
+  - bioconda
+dependencies:
+  - python=3.11
+  - numpy=1.26.4
+  - pandas=2.2.2
+  - scipy=1.13.1
+  - matplotlib=3.9.2
+  - pyopenms=3.3.0

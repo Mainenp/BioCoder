@@ -102,7 +102,10 @@ class MultimodalDerivationTests(unittest.TestCase):
             job for job in jobs if job["derivation_mode"] == "channel_driven_inference"
         )
         self.assertEqual(supervised["labels"][0]["record_id"], "record-1")
+        self.assertIn("*.jpeg", supervised["expected_outputs"])
+        self.assertNotIn("roi_images/*.jpeg", supervised["expected_outputs"])
         self.assertTrue(supervised["metrics_allowed"])
+        self.assertIn("*.jpeg", unlabeled["expected_outputs"])
         self.assertFalse(unlabeled["metrics_allowed"])
         self.assertEqual(report["extractor_contract"]["public_name"], "ChromPeakFormer")
         self.assertFalse(report["dependency_gate"]["installation_attempted"])

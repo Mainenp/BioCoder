@@ -158,7 +158,7 @@ def _supervised_jobs(
                     "feature.csv",
                     "roi_windows.csv",
                     "xic_matrix.npy",
-                    "roi_images/*.jpeg",
+                    "*.jpeg",
                     "derivation_provenance.json",
                 ],
             }
@@ -212,7 +212,7 @@ def _unlabeled_jobs(
                     "feature.csv",
                     "roi_windows.csv",
                     "xic_matrix.npy",
-                    "roi_images/*.jpeg",
+                    "*.jpeg",
                     "derivation_provenance.json",
                 ],
             }
