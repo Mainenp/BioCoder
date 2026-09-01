@@ -68,6 +68,10 @@ Status: planned. A requirement is complete only when its linked checks pass with
 - Builders consume the versioned manifest rather than unrelated CSV files.
 - Supervision sources are restricted to `human`, `deterministic_rule`, or `tool_verified`.
 - Audit-only samples are rejected from primary training datasets.
+- Unified examples bind the image, RT-interpolated sequence, scalar row, target row, source group,
+  and provenance hashes to one asset identity.
+- Scalar normalization is fit on train only; validation statistics cannot affect transforms.
+- Image and sequence peak boundaries must agree in the shared normalized ROI coordinate system.
 
 ### T20-T22 — Training integration
 

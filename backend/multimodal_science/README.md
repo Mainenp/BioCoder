@@ -209,6 +209,33 @@ separates raw adjacent-axis steps from the effective average step inside each RO
 materialization must interpolate against the RT values themselves rather than resize by array index.
 Progress is written to standard error; the final JSON remains on standard output.
 
+## Unified multimodal Dataset
+
+After the v2 sequence preflight passes, materialize the model-facing train and validation arrays:
+
+```bash
+python -m multimodal_science.chrompeakformer.materialize_cli \
+  --index "<external-index-root>/asset_index.jsonl" \
+  --readiness-report "<external-index-root>/training_readiness.json" \
+  --sequence-preflight "<external-index-root>/sequence_preflight.json" \
+  --assets-root "<external-asset-root>" \
+  --output-dir "<external-dataset-root>/multimodal-v1" \
+  --target-points 160
+```
+
+The builder interpolates every signal on 160 uniformly spaced RT coordinates inside its declared
+ROI. It applies per-ROI fifth-percentile baseline correction, nonnegative clipping, `log1p`, and
+shape normalization. Absolute scale is retained as `log1p` maximum and dynamic-range scalar
+features. Q1, Q3, expected RT, ROI width, and signal availability complete the scalar vector; its
+first six columns are standardized using train-only statistics.
+
+Each split contains `signals.npy`, `scalar_features.npy`, `targets.npy`, and `examples.jsonl`.
+Targets are `[peak_present, start_normalized, end_normalized]`; negative boundaries use `-1` only in
+the array and remain `null` in JSON. Image and numerical boundaries must agree in the same `[0, 1]`
+ROI coordinate system. Images are referenced by their verified relative paths and are not copied.
+All files are staged and atomically published together, and repeat runs verify artifact hashes
+before returning a cache hit.
+
 ## Current boundary
 
 This phase has produced deterministic splits, hash-verified extraction jobs, a private-source
