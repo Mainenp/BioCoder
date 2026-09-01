@@ -204,7 +204,10 @@ python -m multimodal_science.chrompeakformer.sequence_preflight_cli \
 The preflight memory-maps each referenced XIC matrix once, verifies matrix shape, unique signal-row
 alignment, finite ROI values, strictly increasing RT axes, and multi-point ROI coverage. It reports
 cropped point counts, sampling intervals, crop fractions, dynamic ranges, constant signals, and
-negative values. Progress is written to standard error; the final JSON remains on standard output.
+negative values. Because scheduled acquisition can create clustered sub-cycle RT points, the report
+separates raw adjacent-axis steps from the effective average step inside each ROI. Sequence
+materialization must interpolate against the RT values themselves rather than resize by array index.
+Progress is written to standard error; the final JSON remains on standard output.
 
 ## Current boundary
 

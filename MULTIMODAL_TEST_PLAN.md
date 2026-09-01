@@ -40,6 +40,8 @@ Status: planned. A requirement is complete only when its linked checks pass with
 - A complete asset index passes the training-readiness gate before any baseline or Qwen3-VL run.
 - Numerical baselines additionally require finite, monotonic, uniquely aligned ROI-cropped XIC
   windows; full-trace point counts cannot be substituted for cropped-window evidence.
+- Nonuniform or clustered acquisition axes are resampled from their RT coordinates, never from
+  array-index distance.
 
 ### T09-T11 — Leakage prevention
 

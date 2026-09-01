@@ -122,9 +122,13 @@ class ChromPeakFormerSequencePreflightTests(unittest.TestCase):
             3.0,
         )
         self.assertEqual(
-            report["distributions"]["median_sampling_interval_seconds_per_matrix"][
+            report["distributions"]["effective_roi_step_seconds_per_asset"][
                 "p50"
             ],
+            45.0,
+        )
+        self.assertEqual(
+            report["distributions"]["rt_step_seconds_all_intervals"]["p50"],
             45.0,
         )
         self.assertEqual(len(events), 2)

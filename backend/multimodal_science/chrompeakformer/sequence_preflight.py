@@ -198,8 +198,10 @@ def build_sequence_preflight_report(
     )
 
     full_point_counts: list[float] = []
+    full_trace_spans: list[float] = []
     cropped_point_counts: list[float] = []
-    median_intervals_seconds: list[float] = []
+    rt_step_seconds: list[float] = []
+    effective_roi_step_seconds: list[float] = []
     crop_fractions: list[float] = []
     signal_dynamic_ranges: list[float] = []
     signal_maxima: list[float] = []
@@ -234,7 +236,8 @@ def build_sequence_preflight_report(
             f"RT axis is not strictly increasing: {relative_path}",
         )
         full_point_counts.append(float(matrix.shape[1]))
-        median_intervals_seconds.append(float(np.median(intervals) * 60.0))
+        full_trace_spans.append(float(rt[-1] - rt[0]))
+        rt_step_seconds.extend(float(value) for value in intervals * 60.0)
 
         for record in records:
             row_key = (relative_path, record["signal_row"])
@@ -255,6 +258,9 @@ def build_sequence_preflight_report(
             )
             cropped_point_counts.append(float(signal.size))
             crop_fractions.append(float(signal.size / matrix.shape[1]))
+            effective_roi_step_seconds.append(
+                float((rt[right - 1] - rt[left]) * 60.0 / (signal.size - 1))
+            )
             signal_minimum = float(np.min(signal))
             signal_maximum = float(np.max(signal))
             dynamic_range = signal_maximum - signal_minimum
@@ -300,7 +306,7 @@ def build_sequence_preflight_report(
         )
 
     payload = {
-        "schema_version": "chrompeak-sequence-preflight-v1",
+        "schema_version": "chrompeak-sequence-preflight-v2",
         "dataset_version": readiness.get("dataset_version"),
         "plan_sha256": readiness.get("plan_sha256"),
         "asset_index_sha256": actual_index_sha256,
@@ -329,9 +335,11 @@ def build_sequence_preflight_report(
         },
         "distributions": {
             "full_trace_point_count_per_matrix": _distribution(full_point_counts),
+            "full_trace_span_minutes_per_matrix": _distribution(full_trace_spans),
+            "rt_step_seconds_all_intervals": _distribution(rt_step_seconds),
             "cropped_roi_point_count_per_asset": _distribution(cropped_point_counts),
-            "median_sampling_interval_seconds_per_matrix": _distribution(
-                median_intervals_seconds
+            "effective_roi_step_seconds_per_asset": _distribution(
+                effective_roi_step_seconds
             ),
             "roi_fraction_of_full_trace": _distribution(crop_fractions),
             "roi_signal_dynamic_range": _distribution(signal_dynamic_ranges),
