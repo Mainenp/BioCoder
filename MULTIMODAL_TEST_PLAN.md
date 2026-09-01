@@ -37,6 +37,7 @@ Status: planned. A requirement is complete only when its linked checks pass with
 - Weak or fallback matches are assigned to the audit bucket.
 - Image, sequence, metadata, ROI window, and label hashes resolve to the same sample identity.
 - An alignment or hash failure makes the sample ineligible.
+- A complete asset index passes the training-readiness gate before any baseline or Qwen3-VL run.
 
 ### T09-T11 — Leakage prevention
 

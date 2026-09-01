@@ -173,6 +173,23 @@ row order. Use `--allow-partial` only for an explicitly partial pilot; full buil
 selected extraction job is missing. Long NFS-backed builds report one verified job at a time to
 standard error while reserving standard output for the final machine-readable JSON result.
 
+## Training-readiness QA
+
+Before a baseline or Qwen3-VL run consumes the index, build a deterministic readiness report:
+
+```bash
+python -m multimodal_science.chrompeakformer.readiness_cli \
+  --index "<external-index-root>/asset_index.jsonl" \
+  --index-report "<external-index-root>/asset_index_report.json" \
+  --output "<external-index-root>/training_readiness.json"
+```
+
+This pass streams the JSONL index and does not reopen the ROI images or XIC arrays. It fails closed
+on a partial or tampered index, inconsistent declared counts, duplicate identities, non-metric
+records, missing train/validation splits, or source artifacts crossing protected splits. The report
+captures split and class balance, source-job and component coverage, XIC length, ROI width, positive
+peak width, and COCO-box width distributions. It is descriptive data evidence, not a model metric.
+
 ## Current boundary
 
 This phase has produced deterministic splits, hash-verified extraction jobs, a private-source
