@@ -236,10 +236,26 @@ ROI coordinate system. Images are referenced by their verified relative paths an
 All files are staged and atomically published together, and repeat runs verify artifact hashes
 before returning a cache hit.
 
+## Sequence-baseline evaluation contract
+
+The sequence baseline loads only the materialized Dataset above. Its loader verifies the report
+schema, every selected artifact hash, declared array shapes, JSON/NumPy target agreement, negative
+boundary sentinels, and source-group identities before returning model inputs. This keeps training
+code from silently bypassing the audited data boundary.
+
+Detection reports use accuracy, balanced accuracy, positive and negative F1, Macro-F1, MCC,
+AUROC, AUPRC (average-precision step integral), specificity, recall, and false-positive rate.
+Boundary quality is evaluated only on human-labelled positive ROIs, using normalized start/end
+MAE, physical-time MAE, width MAE, and 1D interval IoU. Confidence intervals resample complete
+source mzML groups rather than treating the 16,170 correlated compound ROIs as independent
+experiments. Validation threshold selection is deterministic; a selected threshold must be frozen
+before the sealed internal-test split is opened.
+
 ## Current boundary
 
 This phase has produced deterministic splits, hash-verified extraction jobs, a private-source
 adapter, an atomic execution boundary, and a complete train-plus-validation ROI/XIC/COCO index for
-dataset version `raw-072fee8e`. Internal-test extraction, Qwen3-VL training, scientific benchmark
-metrics, and agent-tool integration remain downstream, evidence-gated milestones in
+dataset version `raw-072fee8e`. The unified Dataset loader and source-grouped metric definitions are
+implemented; trained baseline results are not yet claimed. Internal-test extraction, Qwen3-VL
+training, scientific benchmark runs, and agent-tool integration remain downstream milestones in
 `MULTIMODAL_ROADMAP.md`.

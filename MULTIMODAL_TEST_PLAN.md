@@ -91,6 +91,10 @@ The versioned scientific report must contain:
 - Quantification metrics.
 - Blank-sample false positives.
 - The declared ablation table.
+- Detection thresholds are selected without internal-test labels and frozen before test access.
+- Confidence intervals bootstrap complete source mzML groups, not individual compound ROIs.
+- Boundary metrics are restricted to labelled positives and include both normalized and physical
+  time errors.
 
 ### T24 — Agent report
 
