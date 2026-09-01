@@ -190,6 +190,22 @@ records, missing train/validation splits, or source artifacts crossing protected
 captures split and class balance, source-job and component coverage, XIC length, ROI width, positive
 peak width, and COCO-box width distributions. It is descriptive data evidence, not a model metric.
 
+The full-trace XIC length is not the sequence-model input length. Profile the actual ROI crops before
+choosing a resampling size:
+
+```bash
+python -m multimodal_science.chrompeakformer.sequence_preflight_cli \
+  --index "<external-index-root>/asset_index.jsonl" \
+  --readiness-report "<external-index-root>/training_readiness.json" \
+  --assets-root "<external-asset-root>" \
+  --output "<external-index-root>/sequence_preflight.json"
+```
+
+The preflight memory-maps each referenced XIC matrix once, verifies matrix shape, unique signal-row
+alignment, finite ROI values, strictly increasing RT axes, and multi-point ROI coverage. It reports
+cropped point counts, sampling intervals, crop fractions, dynamic ranges, constant signals, and
+negative values. Progress is written to standard error; the final JSON remains on standard output.
+
 ## Current boundary
 
 This phase has produced deterministic splits, hash-verified extraction jobs, a private-source

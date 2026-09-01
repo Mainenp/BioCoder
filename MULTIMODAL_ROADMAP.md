@@ -53,6 +53,13 @@ with zero failures and zero staging directories left behind. These counts prove 
 generation; they are not model-quality or scientific benchmark results. Generated assets and
 absolute execution paths remain outside Git.
 
+The subsequent training-readiness gate passed with no warnings. It confirmed 165 components in
+both train and validation, zero validation-only components, and a train-versus-validation positive
+rate gap of `0.008783`. Its deterministic report SHA-256 is
+`5027330265672012b4bc6302187c772014d87bb22f15ba29a890c67ef1e113b4`. This report is bound to the
+asset-index hash above; numerical ROI-window profiling remains the next prerequisite for choosing
+the sequence resampling length.
+
 ## Objective
 
 Extend BioCoder with a reproducible LC-MS scientific multimodal workflow. The planned system will combine extracted-ion chromatogram images, RT-intensity sequences, transition and sample metadata, a specialist chromatographic peak detector, and a domain-adapted Qwen3-VL model.
