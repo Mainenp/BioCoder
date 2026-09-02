@@ -9,6 +9,11 @@ import numpy as np
 
 from multimodal_science.data.manifest import sha256_file
 from multimodal_science.qwen3vl.build_instruction_cli import parser
+from multimodal_science.qwen3vl.evaluate_predictions_cli import parser as evaluation_parser
+from multimodal_science.qwen3vl.evaluation import (
+    PREDICTION_SCHEMA,
+    evaluate_qwen_predictions,
+)
 from multimodal_science.qwen3vl.instruction_data import (
     TASKS,
     build_instruction_dataset,
@@ -243,6 +248,160 @@ class Qwen3VLInstructionDataTests(unittest.TestCase):
         )
 
         self.assertIsNone(arguments.task)
+        self.assertNotIn("test", destinations)
+        self.assertNotIn("internal_test", destinations)
+
+
+class Qwen3VLEvaluationTests(unittest.TestCase):
+    def _perfect_predictions(self, instructions: Path, path: Path) -> list[dict[str, object]]:
+        answers = read_jsonl(instructions / "validation_answers.jsonl")
+        predictions = [
+            {
+                "schema_version": PREDICTION_SCHEMA,
+                "instruction_id": answer["instruction_id"],
+                "response": answer["expected_response"],
+            }
+            for answer in answers
+        ]
+        write_jsonl(path, predictions)
+        return predictions
+
+    def test_scores_complete_predictions_across_all_tasks(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            instructions = root / "instructions"
+            build_instruction_dataset(make_dataset(root), instructions)
+            predictions = root / "predictions.jsonl"
+            self._perfect_predictions(instructions, predictions)
+
+            result = evaluate_qwen_predictions(
+                instructions,
+                predictions,
+                root / "evaluation",
+                expected_instruction_report_sha256=sha256_file(
+                    instructions / "instruction_dataset_report.json"
+                ),
+                bootstrap_iterations=20,
+            )
+
+            report = json.loads(result.report_path.read_text(encoding="utf-8"))
+            self.assertEqual(result.prediction_records, 7)
+            self.assertEqual(result.valid_json_records, 7)
+            self.assertEqual(result.schema_valid_records, 7)
+            self.assertEqual(result.validation_source_groups, 2)
+            self.assertEqual(report["metrics"]["peak_presence"]["exact_match_rate"], 1.0)
+            self.assertEqual(
+                report["metrics"]["peak_presence_metadata"]["classification"]["macro_f1"],
+                1.0,
+            )
+            self.assertEqual(
+                report["metrics"]["peak_grounding"]["grounding"]["mean_bbox_iou_all"],
+                1.0,
+            )
+            self.assertEqual(report["metrics"]["scientific_qc"]["exact_match_rate"], 1.0)
+            self.assertFalse(report["development_comparison_eligible"])
+            self.assertFalse(report["final_benchmark_eligible"])
+            self.assertFalse(report["internal_test_accessed"])
+            self.assertFalse(report["prediction_generation_provenance_verified"])
+
+    def test_malformed_json_is_retained_as_a_scored_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            instructions = root / "instructions"
+            build_instruction_dataset(make_dataset(root), instructions)
+            predictions_path = root / "predictions.jsonl"
+            predictions = self._perfect_predictions(instructions, predictions_path)
+            prompts = read_jsonl(instructions / "validation_prompts.jsonl")
+            invalid_id = next(
+                record["instruction_id"]
+                for record in prompts
+                if record["task"] == "peak_presence"
+            )
+            for prediction in predictions:
+                if prediction["instruction_id"] == invalid_id:
+                    prediction["response"] = "```json\n{\"peak_present\": true}\n```"
+            write_jsonl(predictions_path, predictions)
+
+            result = evaluate_qwen_predictions(
+                instructions,
+                predictions_path,
+                root / "evaluation",
+                expected_instruction_report_sha256=sha256_file(
+                    instructions / "instruction_dataset_report.json"
+                ),
+                bootstrap_iterations=20,
+            )
+
+            report = json.loads(result.report_path.read_text(encoding="utf-8"))
+            self.assertEqual(result.valid_json_records, 6)
+            self.assertEqual(result.schema_valid_records, 6)
+            self.assertLess(report["metrics"]["peak_presence"]["exact_match_rate"], 1.0)
+            records = read_jsonl(root / "evaluation" / "evaluation_records.jsonl")
+            invalid = next(record for record in records if record["instruction_id"] == invalid_id)
+            self.assertFalse(invalid["valid_json"])
+            self.assertFalse(invalid["schema_valid"])
+
+    def test_rejects_incomplete_or_tampered_evaluation_inputs(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            instructions = root / "instructions"
+            build_instruction_dataset(make_dataset(root), instructions)
+            predictions_path = root / "predictions.jsonl"
+            predictions = self._perfect_predictions(instructions, predictions_path)
+
+            with self.assertRaisesRegex(ValueError, "Instruction report hash mismatch"):
+                evaluate_qwen_predictions(
+                    instructions,
+                    predictions_path,
+                    root / "wrong-report",
+                    expected_instruction_report_sha256="0" * 64,
+                    bootstrap_iterations=20,
+                )
+
+            write_jsonl(predictions_path, predictions[:-1])
+
+            with self.assertRaisesRegex(ValueError, "Prediction IDs"):
+                evaluate_qwen_predictions(
+                    instructions,
+                    predictions_path,
+                    root / "incomplete",
+                    expected_instruction_report_sha256=sha256_file(
+                        instructions / "instruction_dataset_report.json"
+                    ),
+                    bootstrap_iterations=20,
+                )
+
+            self._perfect_predictions(instructions, predictions_path)
+            with (instructions / "validation_answers.jsonl").open("a", encoding="utf-8") as stream:
+                stream.write("{}\n")
+            with self.assertRaisesRegex(ValueError, "hash mismatch"):
+                evaluate_qwen_predictions(
+                    instructions,
+                    predictions_path,
+                    root / "tampered",
+                    expected_instruction_report_sha256=sha256_file(
+                        instructions / "instruction_dataset_report.json"
+                    ),
+                    bootstrap_iterations=20,
+                )
+
+    def test_evaluation_cli_has_no_internal_test_surface(self) -> None:
+        command = evaluation_parser()
+        destinations = {action.dest for action in command._actions}
+        arguments = command.parse_args(
+            [
+                "--instruction-root",
+                "instructions",
+                "--predictions",
+                "predictions.jsonl",
+                "--output-dir",
+                "evaluation",
+                "--instruction-report-sha256",
+                "a" * 64,
+            ]
+        )
+
+        self.assertEqual(arguments.bootstrap_iterations, 1000)
         self.assertNotIn("test", destinations)
         self.assertNotIn("internal_test", destinations)
 

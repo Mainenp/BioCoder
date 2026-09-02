@@ -333,12 +333,47 @@ source assets and derived instruction rows separately; instruction count must ne
 as the number of independent chromatograms or images. Image paths remain relative to the external
 asset root, and image bytes are neither copied nor committed.
 
+Model inference must write one complete JSONL prediction record per validation prompt:
+
+```json
+{"schema_version":"chrompeak-qwen3vl-prediction-v1","instruction_id":"<24-hex-id>","response":"<raw-model-response>"}
+```
+
+The evaluator joins predictions to the separately hashed answer key only after generation. It
+requires exact validation-ID coverage, rejects duplicate or unknown IDs and tampered instruction
+artifacts, and scores malformed or schema-invalid model responses as failures rather than dropping
+them. Run it without an internal-test input surface:
+
+```bash
+python -m multimodal_science.qwen3vl.evaluate_predictions_cli \
+  --instruction-root "<external-dataset-root>/qwen3vl-instructions-v1" \
+  --instruction-report-sha256 "<expected-64-hex-digest>" \
+  --predictions "<external-run-root>/validation_predictions.jsonl" \
+  --output-dir "<external-run-root>/qwen3vl-evaluation" \
+  --bootstrap-iterations 1000 \
+  --seed 17
+```
+
+Presence tasks report binary classification metrics and source-grouped confidence intervals.
+Grounding reports strict JSON/schema validity, full-image box IoU, IoU@0.5, horizontal boundary
+error, and a source-grouped IoU interval. Scientific QC reports exact-match and field accuracy.
+The report intentionally does not collapse heterogeneous tasks into one combined score. Each run
+binds the prediction file, prompts, answer key, instruction manifest, instruction report, and
+source Dataset report by SHA-256. Until a model-inference runner also provides independently
+verifiable generation provenance, evaluator-only reports remain ineligible for development
+comparisons; file separation alone cannot prove that generation never accessed the answer key.
+
 ## Current boundary
 
 This phase has produced deterministic splits, hash-verified extraction jobs, a private-source
 adapter, an atomic execution boundary, and a complete train-plus-validation ROI/XIC/COCO index for
 dataset version `raw-072fee8e`. The unified Dataset loader, source-grouped metrics, PyTorch residual
-1D runner, independent run validator, and Qwen3-VL instruction/evaluation builder are implemented.
-No trained baseline or Qwen3-VL result is claimed yet. Instruction materialization, internal-test
-extraction, model training, scientific benchmark runs, and agent-tool integration remain
-downstream milestones in `MULTIMODAL_ROADMAP.md`.
+1D runner, independent run validator, Qwen3-VL instruction builder, and hash-bound prediction
+evaluator are implemented.
+A verified external materialization contains 16,170 independent ROI assets, 54,335 train
+instructions, and 6,854 answer-separated validation instructions; its report SHA-256 is
+`972d2bafe8fad409f2d472732c4a8ab04acd2a42552d17e6f2aad4b388eb560b`. These artifacts remain
+outside Git. No comparison-eligible trained baseline or Qwen3-VL result is claimed yet. Full
+baseline training, provenance-bound Qwen inference and training, internal-test extraction,
+scientific benchmark runs, and agent-tool integration remain downstream milestones in
+`MULTIMODAL_ROADMAP.md`.

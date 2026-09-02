@@ -76,6 +76,15 @@ Status: planned. A requirement is complete only when its linked checks pass with
   one `<image>` token; visual tokens are forbidden in answers.
 - Validation prompts contain no reference answer. Their answer key is a separate hashed artifact,
   and the builder exposes no internal-test input surface.
+- Qwen3-VL evaluation requires exactly one prediction for every validation instruction ID, verifies
+  all instruction artifact hashes, records the prediction-file hash, and exposes no internal-test
+  input surface.
+- Malformed JSON and task-schema violations remain in the denominator as failures. Presence,
+  grounding, and QC tasks retain separate metrics and source-grouped uncertainty; no synthetic
+  cross-task score is reported.
+- File separation alone does not establish clean prediction generation. Evaluation remains
+  development-comparison ineligible until a generation manifest binds the model/checkpoint,
+  decoding configuration, prompt hash, prediction hash, and no-answer-access attestation.
 - Reports distinguish unique source assets and source mzML groups from correlated multi-task
   instruction rows; derived row counts cannot be claimed as independent samples.
 
