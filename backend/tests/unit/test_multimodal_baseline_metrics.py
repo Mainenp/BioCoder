@@ -37,6 +37,15 @@ class MultimodalBaselineMetricTests(unittest.TestCase):
         self.assertEqual(result["threshold"], 0.5)
         self.assertEqual(result["value"], 1.0)
 
+        for objective in ("mcc", "balanced_accuracy"):
+            selected = select_threshold(
+                [0, 0, 1, 1],
+                [0.1, 0.2, 0.6, 0.7],
+                objective=objective,
+            )
+            self.assertEqual(selected["threshold"], 0.5)
+            self.assertEqual(selected["value"], 1.0)
+
     def test_boundary_metrics_report_normalized_and_physical_errors(self) -> None:
         result = boundary_metrics(
             [[0.2, 0.4], [0.5, 0.8], [-1.0, -1.0]],

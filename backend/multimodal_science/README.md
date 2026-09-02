@@ -251,11 +251,50 @@ source mzML groups rather than treating the 16,170 correlated compound ROIs as i
 experiments. Validation threshold selection is deterministic; a selected threshold must be frozen
 before the sealed internal-test split is opened.
 
+Train the residual 1D detector first as a CPU smoke test. A sample cap is rejected unless the run
+is explicitly marked as non-benchmark evidence:
+
+```bash
+CUDA_VISIBLE_DEVICES="" python -m multimodal_science.baselines.train_sequence_cli \
+  --dataset-root "<external-dataset-root>/multimodal-v1" \
+  --output-dir "<external-run-root>/sequence-smoke" \
+  --modality sequence \
+  --device cpu \
+  --epochs 1 \
+  --smoke-test \
+  --max-train-samples 512 \
+  --max-validation-samples 256 \
+  --bootstrap-iterations 100
+```
+
+For a full development-comparison run, omit all smoke and sample-cap arguments and select a GPU
+explicitly:
+
+```bash
+CUDA_VISIBLE_DEVICES=0 python -m multimodal_science.baselines.train_sequence_cli \
+  --dataset-root "<external-dataset-root>/multimodal-v1" \
+  --output-dir "<external-run-root>/sequence-seed17" \
+  --modality sequence \
+  --device cuda \
+  --seed 17
+```
+
+The `sequence` and `sequence_metadata` modalities share the same residual 1D encoder, detection
+head, and positive-only boundary head; only the latter receives the seven audited scalar features.
+The runner selects its checkpoint by validation loss, reports both fixed-0.5 and
+validation-selected detection metrics, freezes the selected threshold, and saves a source-grouped
+bootstrap report. It refuses to overwrite an existing run directory and has no internal-test CLI
+surface. A full run is eligible for validation-set ablations, not the final benchmark or model
+promotion. Its evidence gate remains incomplete until sealed internal-test, blank-stratified,
+quantification, and declared multimodal-ablation evidence exists. Model checkpoint, configuration,
+epoch history, validation predictions, threshold, code revision, runtime versions, and dataset
+hashes are published together.
+
 ## Current boundary
 
 This phase has produced deterministic splits, hash-verified extraction jobs, a private-source
 adapter, an atomic execution boundary, and a complete train-plus-validation ROI/XIC/COCO index for
 dataset version `raw-072fee8e`. The unified Dataset loader and source-grouped metric definitions are
-implemented; trained baseline results are not yet claimed. Internal-test extraction, Qwen3-VL
-training, scientific benchmark runs, and agent-tool integration remain downstream milestones in
-`MULTIMODAL_ROADMAP.md`.
+implemented, along with a PyTorch residual 1D training runner; trained baseline results are not yet
+claimed. Internal-test extraction, Qwen3-VL training, scientific benchmark runs, and agent-tool
+integration remain downstream milestones in `MULTIMODAL_ROADMAP.md`.

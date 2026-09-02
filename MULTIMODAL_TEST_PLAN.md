@@ -78,6 +78,13 @@ Status: planned. A requirement is complete only when its linked checks pass with
 - Qwen3-VL-8B LoRA configuration, precision, effective batch size, seed, and gradient accumulation are recorded.
 - The 1D encoder output is projected into the expected multimodal representation shape.
 - Every run emits an adapter or checkpoint, configuration snapshot, dataset version, logs, and run metadata.
+- Sequence-only and sequence-plus-metadata runs share the same encoder and heads so that their
+  ablation changes exactly one input modality.
+- Sample-capped smoke runs are ineligible even for development comparisons.
+- Full train/validation runs may support ablations but remain final-benchmark and promotion
+  ineligible until sealed internal-test and all T23 evidence exists.
+- The sequence runner has no internal-test input surface and defaults to CPU unless CUDA is
+  explicitly selected.
 
 ## Evaluation checks
 

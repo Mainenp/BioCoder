@@ -146,7 +146,24 @@ def select_threshold(
     best_threshold = 0.5
     best_value = -float("inf")
     for threshold in candidates:
-        value = float(binary_metrics(labels, scores, threshold=float(threshold))[objective])
+        predicted = scores >= threshold
+        positive = labels == 1
+        negative = ~positive
+        tp = int(np.sum(predicted & positive))
+        fp = int(np.sum(predicted & negative))
+        tn = int(np.sum(~predicted & negative))
+        fn = int(np.sum(~predicted & positive))
+        recall = _divide(tp, tp + fn)
+        specificity = _divide(tn, tn + fp)
+        if objective == "macro_f1":
+            positive_f1 = _divide(2 * tp, 2 * tp + fp + fn)
+            negative_f1 = _divide(2 * tn, 2 * tn + fp + fn)
+            value = (positive_f1 + negative_f1) / 2.0
+        elif objective == "mcc":
+            denominator = math.sqrt((tp + fp) * (tp + fn) * (tn + fp) * (tn + fn))
+            value = _divide(tp * tn - fp * fn, denominator)
+        else:
+            value = (recall + specificity) / 2.0
         candidate_key = (value, -abs(float(threshold) - 0.5), -float(threshold))
         best_key = (best_value, -abs(best_threshold - 0.5), -best_threshold)
         if candidate_key > best_key:

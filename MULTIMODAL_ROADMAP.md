@@ -1,8 +1,9 @@
 # BioCoder × ChromPeakFormer Multimodal Roadmap
 
-Status: Phase A manifest audit, Phase A-plus group splitting, and the complete train-plus-validation
-ROI/XIC/COCO build are verified. Internal-test extraction, model training, and benchmark results
-are not yet complete.
+Status: Phase A manifest audit, Phase A-plus group splitting, the complete train-plus-validation
+ROI/XIC/COCO build, and unified 160-point Dataset materialization are verified. The sequence
+training runner is implemented, but internal-test extraction, completed model runs, and benchmark
+results are not yet complete.
 
 ## Verified Phase A snapshot
 
@@ -57,8 +58,13 @@ The subsequent training-readiness gate passed with no warnings. It confirmed 165
 both train and validation, zero validation-only components, and a train-versus-validation positive
 rate gap of `0.008783`. Its deterministic report SHA-256 is
 `5027330265672012b4bc6302187c772014d87bb22f15ba29a890c67ef1e113b4`. This report is bound to the
-asset-index hash above; numerical ROI-window profiling remains the next prerequisite for choosing
-the sequence resampling length.
+asset-index hash above.
+
+The v2 numerical preflight then verified all 16,170 ROI crops across 98 XIC matrices. The unified
+Dataset materializer interpolated each crop on its true RT coordinates to 160 points and atomically
+published aligned signals, scalar features, targets, and example provenance. Its report SHA-256 is
+`3be8edfe8d8bcc4cf0c2c09374a518e001008831d792d452728cf6a6c160b1b5`; the Dataset remains bound to
+the asset-index hash above. This is model-ready data evidence, not a trained-model result.
 
 ## Objective
 

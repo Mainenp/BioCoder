@@ -7,9 +7,13 @@ from multimodal_science.baselines.metrics import (
     grouped_bootstrap_binary,
     select_threshold,
 )
+from multimodal_science.baselines.sequence_model import SequenceModelSpec
+from multimodal_science.baselines.sequence_training import SequenceTrainConfig
 
 __all__ = [
     "SequenceSplit",
+    "SequenceModelSpec",
+    "SequenceTrainConfig",
     "binary_metrics",
     "boundary_metrics",
     "grouped_bootstrap_binary",
