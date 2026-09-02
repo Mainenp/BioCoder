@@ -133,6 +133,7 @@ class MultimodalManifestTests(unittest.TestCase):
         )
 
         self.assertEqual(decision.match_strategy, MatchStrategy.EXACT_SAMPLE_ID)
+        self.assertEqual(str(decision.match_strategy), "exact_sample_id")
         self.assertEqual(decision.fallback_order, 0)
         self.assertTrue(decision.train_eligible)
         self.assertFalse(decision.audit_bucket)

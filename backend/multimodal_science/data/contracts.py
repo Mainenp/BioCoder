@@ -3,7 +3,13 @@ from __future__ import annotations
 import math
 import re
 from dataclasses import dataclass
-from enum import StrEnum
+try:
+    from enum import StrEnum
+except ImportError:  # Python 3.10 training environments
+    from enum import Enum
+
+    class StrEnum(str, Enum):
+        __str__ = str.__str__
 from typing import Any
 
 NUMERIC_PREFIX = re.compile(r"^\s*([-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[Ee][-+]?\d+)?)")
