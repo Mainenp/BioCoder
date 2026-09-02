@@ -6,7 +6,12 @@ import argparse
 import json
 from pathlib import Path
 
-from multimodal_science.qwen3vl.instruction_data import TASKS, build_instruction_dataset
+from multimodal_science.qwen3vl.instruction_data import (
+    DEFAULT_CHINESE_TRAIN_RATIO,
+    LANGUAGE_PROFILES,
+    TASKS,
+    build_instruction_dataset,
+)
 
 
 def parser() -> argparse.ArgumentParser:
@@ -19,6 +24,18 @@ def parser() -> argparse.ArgumentParser:
         choices=TASKS,
         help="Repeat to select tasks; defaults to all declared tasks.",
     )
+    command.add_argument(
+        "--language-profile",
+        choices=LANGUAGE_PROFILES,
+        default="english",
+        help="Use the legacy English-only contract or the versioned bilingual contract.",
+    )
+    command.add_argument(
+        "--chinese-train-ratio",
+        type=float,
+        default=DEFAULT_CHINESE_TRAIN_RATIO,
+        help="Deterministic Chinese share for bilingual training instructions.",
+    )
     return command
 
 
@@ -28,6 +45,8 @@ def main() -> None:
         arguments.dataset_root,
         arguments.output_dir,
         tasks=arguments.task or TASKS,
+        language_profile=arguments.language_profile,
+        chinese_train_ratio=arguments.chinese_train_ratio,
     )
     print(
         json.dumps(
@@ -39,6 +58,7 @@ def main() -> None:
                 "source_assets": result.source_assets,
                 "train_instructions": result.train_instructions,
                 "validation_instructions": result.validation_instructions,
+                "language_profile": arguments.language_profile,
                 "internal_test_accessed": False,
             },
             ensure_ascii=False,

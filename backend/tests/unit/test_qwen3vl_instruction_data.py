@@ -11,10 +11,13 @@ from multimodal_science.data.manifest import sha256_file
 from multimodal_science.qwen3vl.build_instruction_cli import parser
 from multimodal_science.qwen3vl.evaluate_predictions_cli import parser as evaluation_parser
 from multimodal_science.qwen3vl.evaluation import (
+    BILINGUAL_EVALUATION_REPORT_SCHEMA,
     PREDICTION_SCHEMA,
     evaluate_qwen_predictions,
 )
 from multimodal_science.qwen3vl.instruction_data import (
+    BILINGUAL_DATASET_SCHEMA,
+    DATASET_SCHEMA,
     TASKS,
     build_instruction_dataset,
 )
@@ -173,17 +176,23 @@ class Qwen3VLInstructionDataTests(unittest.TestCase):
             prompts = read_jsonl(output / "validation_prompts.jsonl")
             answers = read_jsonl(output / "validation_answers.jsonl")
             manifest = read_jsonl(output / "instruction_manifest.jsonl")
+            report = json.loads(
+                (output / "instruction_dataset_report.json").read_text(encoding="utf-8")
+            )
 
             self.assertEqual(result.source_assets, 4)
             self.assertEqual(result.train_instructions, 7)
             self.assertEqual(result.validation_instructions, 7)
             self.assertEqual(len(manifest), 14)
+            self.assertEqual(report["schema_version"], DATASET_SCHEMA)
             self.assertTrue(all(set(record) == {"image", "conversations"} for record in train))
             self.assertTrue(
                 all(record["conversations"][0]["value"].count("<image>") == 1 for record in train)
             )
             self.assertTrue(all(len(record["conversations"]) == 1 for record in prompts))
             self.assertTrue(all("expected_response" not in record for record in prompts))
+            self.assertTrue(all("language" not in record for record in prompts))
+            self.assertTrue(all("pair_id" not in record for record in manifest))
             self.assertEqual(
                 {record["instruction_id"] for record in prompts},
                 {record["instruction_id"] for record in answers},
@@ -201,6 +210,72 @@ class Qwen3VLInstructionDataTests(unittest.TestCase):
             build_instruction_dataset(dataset, first, tasks=TASKS)
             build_instruction_dataset(dataset, second, tasks=TASKS)
 
+            for name in (
+                "builder_config.json",
+                "train_qwen.jsonl",
+                "validation_prompts.jsonl",
+                "validation_answers.jsonl",
+                "instruction_manifest.jsonl",
+            ):
+                self.assertEqual(sha256_file(first / name), sha256_file(second / name))
+
+    def test_builds_deterministic_bilingual_train_and_parallel_validation(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            dataset = make_dataset(root)
+            first = root / "bilingual-first"
+            second = root / "bilingual-second"
+
+            result = build_instruction_dataset(
+                dataset,
+                first,
+                language_profile="bilingual",
+            )
+            build_instruction_dataset(
+                dataset,
+                second,
+                language_profile="bilingual",
+            )
+
+            train = read_jsonl(first / "train_qwen.jsonl")
+            prompts = read_jsonl(first / "validation_prompts.jsonl")
+            answers = read_jsonl(first / "validation_answers.jsonl")
+            manifest = read_jsonl(first / "instruction_manifest.jsonl")
+            report = json.loads(
+                (first / "instruction_dataset_report.json").read_text(encoding="utf-8")
+            )
+            validation_manifest = [
+                record for record in manifest if record["split"] == "validation"
+            ]
+            pairs: dict[str, list[dict[str, object]]] = {}
+            for record in validation_manifest:
+                pairs.setdefault(str(record["pair_id"]), []).append(record)
+
+            self.assertEqual(result.train_instructions, 7)
+            self.assertEqual(result.validation_instructions, 14)
+            self.assertEqual(len(train), 7)
+            self.assertEqual(len(prompts), 14)
+            self.assertEqual(len(answers), 14)
+            self.assertEqual(len(manifest), 21)
+            self.assertTrue(all(set(record) == {"image", "conversations"} for record in train))
+            self.assertEqual(len(pairs), 7)
+            self.assertTrue(
+                all(
+                    {item["language"] for item in pair} == {"en", "zh-CN"}
+                    for pair in pairs.values()
+                )
+            )
+            self.assertTrue(
+                any("请" in record["conversations"][0]["value"] for record in prompts)
+            )
+            self.assertEqual(report["schema_version"], BILINGUAL_DATASET_SCHEMA)
+            self.assertEqual(
+                report["counts"]["by_split"]["validation"]["by_language"],
+                {"en": 7, "zh-CN": 7},
+            )
+            self.assertTrue(
+                report["contracts"]["language_variants_are_not_independent_source_assets"]
+            )
             for name in (
                 "builder_config.json",
                 "train_qwen.jsonl",
@@ -248,6 +323,21 @@ class Qwen3VLInstructionDataTests(unittest.TestCase):
         )
 
         self.assertIsNone(arguments.task)
+        self.assertEqual(arguments.language_profile, "english")
+        bilingual = command.parse_args(
+            [
+                "--dataset-root",
+                "dataset",
+                "--output-dir",
+                "instructions",
+                "--language-profile",
+                "bilingual",
+                "--chinese-train-ratio",
+                "0.7",
+            ]
+        )
+        self.assertEqual(bilingual.language_profile, "bilingual")
+        self.assertEqual(bilingual.chinese_train_ratio, 0.7)
         self.assertNotIn("test", destinations)
         self.assertNotIn("internal_test", destinations)
 
@@ -340,6 +430,87 @@ class Qwen3VLEvaluationTests(unittest.TestCase):
             invalid = next(record for record in records if record["instruction_id"] == invalid_id)
             self.assertFalse(invalid["valid_json"])
             self.assertFalse(invalid["schema_valid"])
+
+    def test_reports_language_metrics_and_cross_language_consistency(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            instructions = root / "bilingual-instructions"
+            build_instruction_dataset(
+                make_dataset(root),
+                instructions,
+                language_profile="bilingual",
+            )
+            predictions_path = root / "bilingual-predictions.jsonl"
+            predictions = self._perfect_predictions(instructions, predictions_path)
+
+            result = evaluate_qwen_predictions(
+                instructions,
+                predictions_path,
+                root / "perfect-evaluation",
+                expected_instruction_report_sha256=sha256_file(
+                    instructions / "instruction_dataset_report.json"
+                ),
+                bootstrap_iterations=20,
+            )
+            report = json.loads(result.report_path.read_text(encoding="utf-8"))
+
+            self.assertEqual(result.prediction_records, 14)
+            self.assertEqual(report["schema_version"], BILINGUAL_EVALUATION_REPORT_SCHEMA)
+            self.assertEqual(report["counts"]["by_language"], {"en": 7, "zh-CN": 7})
+            self.assertEqual(
+                report["metrics_by_language"]["zh-CN"]["peak_presence"][
+                    "exact_match_rate"
+                ],
+                1.0,
+            )
+            self.assertEqual(
+                report["cross_language_consistency"]["peak_grounding"][
+                    "mean_prediction_bbox_iou_all"
+                ],
+                1.0,
+            )
+
+            answers = read_jsonl(instructions / "validation_answers.jsonl")
+            changed_id = next(
+                answer["instruction_id"]
+                for answer in answers
+                if answer["task"] == "peak_presence"
+                and answer["language"] == "zh-CN"
+                and json.loads(answer["expected_response"])["peak_present"]
+            )
+            for prediction in predictions:
+                if prediction["instruction_id"] == changed_id:
+                    prediction["response"] = '{"peak_present":false}'
+            write_jsonl(predictions_path, predictions)
+            changed = evaluate_qwen_predictions(
+                instructions,
+                predictions_path,
+                root / "changed-evaluation",
+                expected_instruction_report_sha256=sha256_file(
+                    instructions / "instruction_dataset_report.json"
+                ),
+                bootstrap_iterations=20,
+            )
+            changed_report = json.loads(changed.report_path.read_text(encoding="utf-8"))
+
+            self.assertEqual(
+                changed_report["metrics_by_language"]["en"]["peak_presence"][
+                    "exact_match_rate"
+                ],
+                1.0,
+            )
+            self.assertLess(
+                changed_report["metrics_by_language"]["zh-CN"]["peak_presence"][
+                    "exact_match_rate"
+                ],
+                1.0,
+            )
+            self.assertLess(
+                changed_report["cross_language_consistency"]["peak_presence"][
+                    "exact_prediction_consistency_rate_all"
+                ],
+                1.0,
+            )
 
     def test_rejects_incomplete_or_tampered_evaluation_inputs(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

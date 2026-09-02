@@ -319,6 +319,24 @@ python -m multimodal_science.qwen3vl.build_instruction_cli \
   --output-dir "<external-dataset-root>/qwen3vl-instructions-v1"
 ```
 
+The versioned bilingual profile keeps the legacy English v1 unchanged while localizing the
+instruction layer:
+
+```bash
+python -m multimodal_science.qwen3vl.build_instruction_cli \
+  --dataset-root "<external-dataset-root>/multimodal-v1" \
+  --output-dir "<external-dataset-root>/qwen3vl-instructions-v2-bilingual" \
+  --language-profile bilingual \
+  --chinese-train-ratio 0.6
+```
+
+The bilingual train file still contains one derived instruction per asset/task combination. Its
+language is assigned reproducibly from the semantic instruction hash, so changing output paths or
+rerunning the builder cannot reshuffle languages. Validation contains parallel `en` and `zh-CN`
+prompts with distinct instruction IDs and a shared `pair_id`. JSON keys and controlled values stay
+language-neutral English identifiers. The report records language counts and explicitly marks the
+parallel prompts as correlated language views, not additional independent scientific samples.
+
 `train_qwen.jsonl` follows the official Qwen3-VL single-image `image` plus `conversations`
 contract, with exactly one `<image>` token in each human message and no visual tokens in model
 answers. The format is grounded in the
@@ -357,11 +375,13 @@ python -m multimodal_science.qwen3vl.evaluate_predictions_cli \
 Presence tasks report binary classification metrics and source-grouped confidence intervals.
 Grounding reports strict JSON/schema validity, full-image box IoU, IoU@0.5, horizontal boundary
 error, and a source-grouped IoU interval. Scientific QC reports exact-match and field accuracy.
-The report intentionally does not collapse heterogeneous tasks into one combined score. Each run
-binds the prediction file, prompts, answer key, instruction manifest, instruction report, and
-source Dataset report by SHA-256. Until a model-inference runner also provides independently
-verifiable generation provenance, evaluator-only reports remain ineligible for development
-comparisons; file separation alone cannot prove that generation never accessed the answer key.
+For bilingual v2, the same evaluator additionally reports every task separately for `en` and
+`zh-CN`, plus paired cross-language exact consistency and grounding-box consistency. The report
+intentionally does not collapse heterogeneous tasks into one combined score. Each run binds the
+prediction file, prompts, answer key, instruction manifest, instruction report, and source Dataset
+report by SHA-256. Until a model-inference runner also provides independently verifiable generation
+provenance, evaluator-only reports remain ineligible for development comparisons; file separation
+alone cannot prove that generation never accessed the answer key.
 
 ## Current boundary
 
@@ -373,7 +393,9 @@ evaluator are implemented.
 A verified external materialization contains 16,170 independent ROI assets, 54,335 train
 instructions, and 6,854 answer-separated validation instructions; its report SHA-256 is
 `972d2bafe8fad409f2d472732c4a8ab04acd2a42552d17e6f2aad4b388eb560b`. These artifacts remain
-outside Git. No comparison-eligible trained baseline or Qwen3-VL result is claimed yet. Full
+outside Git. The bilingual v2 builder and evaluator contract are implemented but have not yet been
+materialized against that external Dataset. No comparison-eligible trained baseline or Qwen3-VL
+result is claimed yet. Full
 baseline training, provenance-bound Qwen inference and training, internal-test extraction,
 scientific benchmark runs, and agent-tool integration remain downstream milestones in
 `MULTIMODAL_ROADMAP.md`.

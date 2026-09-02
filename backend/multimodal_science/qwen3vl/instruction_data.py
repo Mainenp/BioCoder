@@ -20,6 +20,13 @@ DATASET_SCHEMA = "chrompeak-qwen3vl-instructions-v1"
 MANIFEST_SCHEMA = "chrompeak-qwen3vl-instruction-manifest-v1"
 VALIDATION_PROMPT_SCHEMA = "chrompeak-qwen3vl-validation-prompt-v1"
 VALIDATION_ANSWER_SCHEMA = "chrompeak-qwen3vl-validation-answer-v1"
+BILINGUAL_DATASET_SCHEMA = "chrompeak-qwen3vl-instructions-v2"
+BILINGUAL_MANIFEST_SCHEMA = "chrompeak-qwen3vl-instruction-manifest-v2"
+BILINGUAL_VALIDATION_PROMPT_SCHEMA = "chrompeak-qwen3vl-validation-prompt-v2"
+BILINGUAL_VALIDATION_ANSWER_SCHEMA = "chrompeak-qwen3vl-validation-answer-v2"
+LANGUAGE_PROFILES = ("english", "bilingual")
+LANGUAGES = ("en", "zh-CN")
+DEFAULT_CHINESE_TRAIN_RATIO = 0.6
 OFFICIAL_FORMAT_REFERENCE = (
     "https://github.com/QwenLM/Qwen3-VL/blob/main/qwen-vl-finetune/README.md"
 )
@@ -262,8 +269,15 @@ def _json_response(payload: dict[str, Any]) -> str:
     return json.dumps(payload, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
 
 
-def _metadata_context(example: dict[str, Any]) -> str:
+def _metadata_context(example: dict[str, Any], language: str) -> str:
     metadata = example["metadata"]
+    if language == "zh-CN":
+        return (
+            f"分析物：{metadata['component']}\n"
+            f"通道：{metadata['channel']}\n"
+            f"离子对：Q1={float(metadata['q1']):.6g}，Q3={float(metadata['q3']):.6g}\n"
+            f"预期保留时间：{float(metadata['expected_rt_minutes']):.6g} 分钟"
+        )
     return (
         f"Analyte: {metadata['component']}\n"
         f"Channel: {metadata['channel']}\n"
@@ -272,23 +286,39 @@ def _metadata_context(example: dict[str, Any]) -> str:
     )
 
 
-def _task_record(example: dict[str, Any], task: str) -> tuple[str, str, str, list[str]] | None:
+def _task_record(
+    example: dict[str, Any], task: str, language: str
+) -> tuple[str, str, str, list[str]] | None:
     target = example["target"]
     present = bool(target["peak_present"])
     image = example["image"]
     if task == "peak_presence":
-        prompt = (
-            "<image>\nAnalyze this chromatographic ROI image. Return JSON only with exactly "
-            "this schema: {\"peak_present\":true|false}."
-        )
+        if language == "zh-CN":
+            prompt = (
+                "<image>\n请分析这张色谱 ROI 图像，判断目标色谱峰是否存在。仅返回 JSON，"
+                "并严格使用此结构：{\"peak_present\":true|false}。"
+            )
+        else:
+            prompt = (
+                "<image>\nAnalyze this chromatographic ROI image. Return JSON only with exactly "
+                "this schema: {\"peak_present\":true|false}."
+            )
         response = _json_response({"peak_present": present})
         return prompt, response, "human", ["image"]
     if task == "peak_presence_metadata":
-        prompt = (
-            "<image>\nAnalyze this chromatographic ROI using the image and acquisition metadata.\n"
-            f"{_metadata_context(example)}\n"
-            "Return JSON only with exactly this schema: {\"peak_present\":true|false}."
-        )
+        if language == "zh-CN":
+            prompt = (
+                "<image>\n请结合色谱 ROI 图像和采集元数据，判断目标色谱峰是否存在。\n"
+                f"{_metadata_context(example, language)}\n"
+                "仅返回 JSON，并严格使用此结构：{\"peak_present\":true|false}。"
+            )
+        else:
+            prompt = (
+                "<image>\nAnalyze this chromatographic ROI using the image and acquisition "
+                "metadata.\n"
+                f"{_metadata_context(example, language)}\n"
+                "Return JSON only with exactly this schema: {\"peak_present\":true|false}."
+            )
         response = _json_response({"peak_present": present})
         return prompt, response, "human", ["image", "metadata"]
     if task == "peak_grounding":
@@ -298,21 +328,38 @@ def _task_record(example: dict[str, Any], task: str) -> tuple[str, str, str, lis
         height = int(image["height"])
         x1 = max(0, min(width - 1, round(float(target["start_normalized"]) * width)))
         x2 = max(x1 + 1, min(width, round(float(target["end_normalized"]) * width)))
-        prompt = (
-            "<image>\nLocate the chromatographic peak interval in this ROI image. Return JSON only "
-            "with exactly this schema: {\"bbox_2d\":[x1,y1,x2,y2]}. Coordinates must be "
-            f"source-image pixels for a {width}x{height} image; x follows retention time and the "
-            "box spans the full image height."
-        )
+        if language == "zh-CN":
+            prompt = (
+                "<image>\n请在这张色谱 ROI 图像中定位目标峰区间。仅返回 JSON，并严格使用"
+                "此结构：{\"bbox_2d\":[x1,y1,x2,y2]}。坐标必须使用原图像素；"
+                f"图像尺寸为 {width}×{height}，x 轴对应保留时间，边界框覆盖图像完整高度。"
+            )
+        else:
+            prompt = (
+                "<image>\nLocate the chromatographic peak interval in this ROI image. Return JSON "
+                "only with exactly this schema: {\"bbox_2d\":[x1,y1,x2,y2]}. Coordinates must be "
+                f"source-image pixels for a {width}x{height} image; x follows retention time and "
+                "the box spans the full image height."
+            )
         response = _json_response({"bbox_2d": [x1, 0, x2, height]})
         return prompt, response, "human", ["image"]
     if task == "scientific_qc":
-        prompt = (
-            "<image>\nPerform chromatographic peak QC using the image and acquisition metadata.\n"
-            f"{_metadata_context(example)}\n"
-            "Return JSON only with exactly this schema: "
-            "{\"qc_state\":\"ok|no_peak\",\"reason\":\"peak_detected|no_visible_peak\"}."
-        )
+        if language == "zh-CN":
+            prompt = (
+                "<image>\n请结合图像和采集元数据完成色谱峰质量检查。\n"
+                f"{_metadata_context(example, language)}\n"
+                "仅返回 JSON，并严格使用此结构："
+                "{\"qc_state\":\"ok|no_peak\",\"reason\":"
+                "\"peak_detected|no_visible_peak\"}。"
+            )
+        else:
+            prompt = (
+                "<image>\nPerform chromatographic peak QC using the image and acquisition "
+                "metadata.\n"
+                f"{_metadata_context(example, language)}\n"
+                "Return JSON only with exactly this schema: "
+                "{\"qc_state\":\"ok|no_peak\",\"reason\":\"peak_detected|no_visible_peak\"}."
+            )
         response = _json_response(
             {
                 "qc_state": "ok" if present else "no_peak",
@@ -330,11 +377,23 @@ def _instruction_id(
     return hashlib.sha256(payload).hexdigest()[:24]
 
 
+def _localized_instruction_id(pair_id: str, language: str) -> str:
+    return hashlib.sha256(f"{pair_id}\0{language}".encode("utf-8")).hexdigest()[:24]
+
+
+def _train_language(pair_id: str, chinese_ratio: float) -> str:
+    digest = hashlib.sha256(f"{pair_id}\0train-language".encode("utf-8")).digest()
+    fraction = int.from_bytes(digest[:8], byteorder="big") / float(1 << 64)
+    return "zh-CN" if fraction < chinese_ratio else "en"
+
+
 def _records_for_split(
     examples: Iterable[dict[str, Any]],
     split: str,
     tasks: tuple[str, ...],
     dataset_report_sha256: str,
+    language_profile: str,
+    chinese_train_ratio: float,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
     train_records = []
     validation_prompts = []
@@ -342,54 +401,83 @@ def _records_for_split(
     manifest = []
     for example in examples:
         for task in tasks:
-            built = _task_record(example, task)
-            if built is None:
-                continue
-            prompt, response, supervision_source, modalities = built
-            _require(prompt.count("<image>") == 1, "Prompt must contain exactly one image token")
-            _require(
-                "<image>" not in response and "<video>" not in response,
-                "Answer contains a visual token",
-            )
-            _object(json.loads(response), "instruction response")
-            instruction_id = _instruction_id(
+            pair_id = _instruction_id(
                 dataset_report_sha256, split, example["asset_id"], task
             )
-            image_path = _portable_image_path(example["image"]["path"], int(example["row"]))
-            if split == "train":
-                output_row = len(train_records)
-                train_records.append(
-                    {
-                        "image": image_path,
-                        "conversations": [
-                            {"from": "human", "value": prompt},
-                            {"from": "gpt", "value": response},
-                        ],
-                    }
-                )
-                output_artifact = "train_qwen.jsonl"
+            if language_profile == "english":
+                languages = ("en",)
+            elif split == "validation":
+                languages = LANGUAGES
             else:
-                output_row = len(validation_prompts)
-                validation_prompts.append(
-                    {
+                languages = (_train_language(pair_id, chinese_train_ratio),)
+            for language in languages:
+                built = _task_record(example, task, language)
+                if built is None:
+                    continue
+                prompt, response, supervision_source, modalities = built
+                _require(
+                    prompt.count("<image>") == 1,
+                    "Prompt must contain exactly one image token",
+                )
+                _require(
+                    "<image>" not in response and "<video>" not in response,
+                    "Answer contains a visual token",
+                )
+                _object(json.loads(response), "instruction response")
+                instruction_id = (
+                    pair_id
+                    if language_profile == "english"
+                    else _localized_instruction_id(pair_id, language)
+                )
+                image_path = _portable_image_path(
+                    example["image"]["path"], int(example["row"])
+                )
+                if split == "train":
+                    output_row = len(train_records)
+                    train_records.append(
+                        {
+                            "image": image_path,
+                            "conversations": [
+                                {"from": "human", "value": prompt},
+                                {"from": "gpt", "value": response},
+                            ],
+                        }
+                    )
+                    output_artifact = "train_qwen.jsonl"
+                else:
+                    output_row = len(validation_prompts)
+                    prompt_record: dict[str, Any] = {
                         "schema_version": VALIDATION_PROMPT_SCHEMA,
                         "instruction_id": instruction_id,
                         "task": task,
                         "image": image_path,
                         "conversations": [{"from": "human", "value": prompt}],
                     }
-                )
-                validation_answers.append(
-                    {
+                    answer_record: dict[str, Any] = {
                         "schema_version": VALIDATION_ANSWER_SCHEMA,
                         "instruction_id": instruction_id,
                         "task": task,
                         "expected_response": response,
                     }
-                )
-                output_artifact = "validation_prompts.jsonl"
-            manifest.append(
-                {
+                    if language_profile == "bilingual":
+                        prompt_record.update(
+                            {
+                                "schema_version": BILINGUAL_VALIDATION_PROMPT_SCHEMA,
+                                "pair_id": pair_id,
+                                "language": language,
+                            }
+                        )
+                        answer_record.update(
+                            {
+                                "schema_version": BILINGUAL_VALIDATION_ANSWER_SCHEMA,
+                                "pair_id": pair_id,
+                                "language": language,
+                            }
+                        )
+                    validation_prompts.append(prompt_record)
+                    validation_answers.append(answer_record)
+                    output_artifact = "validation_prompts.jsonl"
+                manifest_record: dict[str, Any] = {
                     "schema_version": MANIFEST_SCHEMA,
                     "instruction_id": instruction_id,
                     "split": split,
@@ -408,7 +496,17 @@ def _records_for_split(
                     "source_dataset_report_sha256": dataset_report_sha256,
                     "asset_index_sha256": example["provenance"]["asset_index_sha256"],
                 }
-            )
+                if language_profile == "bilingual":
+                    manifest_record.update(
+                        {
+                            "schema_version": BILINGUAL_MANIFEST_SCHEMA,
+                            "pair_id": pair_id,
+                            "language": language,
+                            "image_width": int(example["image"]["width"]),
+                            "image_height": int(example["image"]["height"]),
+                        }
+                    )
+                manifest.append(manifest_record)
     return train_records, validation_prompts, validation_answers, manifest
 
 
@@ -438,6 +536,8 @@ def build_instruction_dataset(
     output_dir: Path,
     *,
     tasks: Iterable[str] = TASKS,
+    language_profile: str = "english",
+    chinese_train_ratio: float = DEFAULT_CHINESE_TRAIN_RATIO,
 ) -> InstructionDatasetResult:
     """Publish official-format train records and answer-separated validation records."""
 
@@ -449,12 +549,34 @@ def build_instruction_dataset(
     _require(bool(selected_tasks), "At least one instruction task is required")
     unsupported = sorted(set(selected_tasks) - set(TASKS))
     _require(not unsupported, f"Unsupported instruction tasks: {unsupported}")
+    _require(
+        language_profile in LANGUAGE_PROFILES,
+        f"Unsupported language profile: {language_profile}",
+    )
+    _require(
+        isinstance(chinese_train_ratio, (int, float))
+        and not isinstance(chinese_train_ratio, bool)
+        and math.isfinite(float(chinese_train_ratio))
+        and 0.0 < float(chinese_train_ratio) < 1.0,
+        "Chinese train ratio must be between zero and one",
+    )
+    chinese_train_ratio = float(chinese_train_ratio)
     source_report, source_report_sha256, examples = _load_examples(dataset_root)
     train, _, _, train_manifest = _records_for_split(
-        examples["train"], "train", selected_tasks, source_report_sha256
+        examples["train"],
+        "train",
+        selected_tasks,
+        source_report_sha256,
+        language_profile,
+        chinese_train_ratio,
     )
     _, validation_prompts, validation_answers, validation_manifest = _records_for_split(
-        examples["validation"], "validation", selected_tasks, source_report_sha256
+        examples["validation"],
+        "validation",
+        selected_tasks,
+        source_report_sha256,
+        language_profile,
+        chinese_train_ratio,
     )
     _require(bool(train), "Selected tasks produced no train instructions")
     _require(bool(validation_prompts), "Selected tasks produced no validation instructions")
@@ -478,17 +600,26 @@ def build_instruction_dataset(
         prompts_path = staging / "validation_prompts.jsonl"
         answers_path = staging / "validation_answers.jsonl"
         manifest_path = staging / "instruction_manifest.jsonl"
-        _write_json(
-            config_path,
-            {
-                "schema_version": "chrompeak-qwen3vl-builder-config-v1",
-                "tasks": list(selected_tasks),
-                "train_split": "train",
-                "evaluation_split": "validation",
-                "internal_test_accessed": False,
-                "official_format_reference": OFFICIAL_FORMAT_REFERENCE,
-            },
-        )
+        builder_config = {
+            "schema_version": "chrompeak-qwen3vl-builder-config-v1",
+            "tasks": list(selected_tasks),
+            "train_split": "train",
+            "evaluation_split": "validation",
+            "internal_test_accessed": False,
+            "official_format_reference": OFFICIAL_FORMAT_REFERENCE,
+        }
+        if language_profile == "bilingual":
+            builder_config.update(
+                {
+                    "schema_version": "chrompeak-qwen3vl-builder-config-v2",
+                    "language_profile": language_profile,
+                    "languages": list(LANGUAGES),
+                    "chinese_train_ratio": chinese_train_ratio,
+                    "train_language_assignment": "sha256-threshold-v1",
+                    "validation_language_pairing": "parallel-en-zh-CN",
+                }
+            )
+        _write_json(config_path, builder_config)
         _write_jsonl(train_path, train)
         _write_jsonl(prompts_path, validation_prompts)
         _write_jsonl(answers_path, validation_answers)
@@ -519,17 +650,70 @@ def build_instruction_dataset(
         label_counts: dict[str, Counter[str]] = defaultdict(Counter)
         instruction_assets: dict[str, set[str]] = defaultdict(set)
         instruction_groups: dict[str, set[str]] = defaultdict(set)
+        language_counts: dict[str, Counter[str]] = defaultdict(Counter)
         for record in manifest:
             split = record["split"]
             task_counts[split][record["task"]] += 1
             label_counts[split][str(record["target_peak_present"]).lower()] += 1
             instruction_assets[split].add(record["asset_id"])
             instruction_groups[split].add(record["group_id"])
+            if language_profile == "bilingual":
+                language_counts[split][record["language"]] += 1
+        split_counts = {
+            split: {
+                "source_assets": len(examples[split]),
+                "instruction_backed_assets": len(instruction_assets[split]),
+                "source_groups": len(instruction_groups[split]),
+                "instructions": sum(task_counts[split].values()),
+                "by_task": dict(sorted(task_counts[split].items())),
+                "by_target_presence": dict(sorted(label_counts[split].items())),
+            }
+            for split in ("train", "validation")
+        }
+        if language_profile == "bilingual":
+            for split in ("train", "validation"):
+                split_counts[split]["by_language"] = dict(
+                    sorted(language_counts[split].items())
+                )
+        contracts: dict[str, Any] = {
+            "tasks": list(selected_tasks),
+            "train_format": "qwen3vl-image-conversations-jsonl",
+            "one_image_token_per_train_record": True,
+            "visual_tokens_forbidden_in_answers": True,
+            "validation_answers_separated_from_prompts": True,
+            "image_paths_relative_to_external_assets_root": True,
+            "images_reopened": False,
+            "official_format_reference": OFFICIAL_FORMAT_REFERENCE,
+            "supervision_sources": ["human", "deterministic_rule"],
+        }
+        if language_profile == "bilingual":
+            contracts.update(
+                {
+                    "language_profile": language_profile,
+                    "languages": list(LANGUAGES),
+                    "canonical_response_schema_language": "English identifiers",
+                    "train_has_one_language_per_semantic_instruction": True,
+                    "validation_has_parallel_language_pairs": True,
+                    "language_variants_are_not_independent_source_assets": True,
+                }
+            )
+        report_counts: dict[str, Any] = {
+            "instructions": len(manifest),
+            "by_split": split_counts,
+        }
+        if language_profile == "bilingual":
+            report_counts["independent_source_assets"] = sum(
+                len(value) for value in examples.values()
+            )
         report_path = staging / "instruction_dataset_report.json"
         _write_json(
             report_path,
             {
-                "schema_version": DATASET_SCHEMA,
+                "schema_version": (
+                    BILINGUAL_DATASET_SCHEMA
+                    if language_profile == "bilingual"
+                    else DATASET_SCHEMA
+                ),
                 "created_at": datetime.now(timezone.utc).isoformat(),
                 "source_dataset": {
                     "dataset_report_sha256": source_report_sha256,
@@ -538,31 +722,8 @@ def build_instruction_dataset(
                     "source_assets": sum(len(value) for value in examples.values()),
                     "by_split": {split: len(examples[split]) for split in ("train", "validation")},
                 },
-                "counts": {
-                    "instructions": len(manifest),
-                    "by_split": {
-                        split: {
-                            "source_assets": len(examples[split]),
-                            "instruction_backed_assets": len(instruction_assets[split]),
-                            "source_groups": len(instruction_groups[split]),
-                            "instructions": sum(task_counts[split].values()),
-                            "by_task": dict(sorted(task_counts[split].items())),
-                            "by_target_presence": dict(sorted(label_counts[split].items())),
-                        }
-                        for split in ("train", "validation")
-                    },
-                },
-                "contracts": {
-                    "tasks": list(selected_tasks),
-                    "train_format": "qwen3vl-image-conversations-jsonl",
-                    "one_image_token_per_train_record": True,
-                    "visual_tokens_forbidden_in_answers": True,
-                    "validation_answers_separated_from_prompts": True,
-                    "image_paths_relative_to_external_assets_root": True,
-                    "images_reopened": False,
-                    "official_format_reference": OFFICIAL_FORMAT_REFERENCE,
-                    "supervision_sources": ["human", "deterministic_rule"],
-                },
+                "counts": report_counts,
+                "contracts": contracts,
                 "internal_test_accessed": False,
                 "final_benchmark_eligible": False,
                 "artifacts": artifacts,

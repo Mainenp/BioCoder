@@ -74,6 +74,11 @@ Status: planned. A requirement is complete only when its linked checks pass with
 - Image and sequence peak boundaries must agree in the shared normalized ROI coordinate system.
 - Qwen3-VL train records follow the official one-image conversation contract and contain exactly
   one `<image>` token; visual tokens are forbidden in answers.
+- The legacy English-only v1 contract remains reproducible. Bilingual v2 assigns one deterministic
+  language to each train instruction and emits paired `en`/`zh-CN` validation prompts with distinct
+  instruction IDs and one shared semantic `pair_id`.
+- Canonical JSON keys and controlled response values do not change with prompt language. Reports
+  expose language counts and never count parallel language prompts as independent source assets.
 - Validation prompts contain no reference answer. Their answer key is a separate hashed artifact,
   and the builder exposes no internal-test input surface.
 - Qwen3-VL evaluation requires exactly one prediction for every validation instruction ID, verifies
@@ -82,6 +87,9 @@ Status: planned. A requirement is complete only when its linked checks pass with
 - Malformed JSON and task-schema violations remain in the denominator as failures. Presence,
   grounding, and QC tasks retain separate metrics and source-grouped uncertainty; no synthetic
   cross-task score is reported.
+- Bilingual evaluations report task metrics independently for `en` and `zh-CN`. Every semantic
+  validation pair contributes to a cross-language consistency rate; invalid output makes the pair
+  inconsistent, and grounding additionally reports prediction-to-prediction box IoU.
 - File separation alone does not establish clean prediction generation. Evaluation remains
   development-comparison ineligible until a generation manifest binds the model/checkpoint,
   decoding configuration, prompt hash, prediction hash, and no-answer-access attestation.
