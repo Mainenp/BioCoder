@@ -8,7 +8,7 @@ import shutil
 import uuid
 from collections.abc import Callable, Mapping
 from dataclasses import asdict, dataclass
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -173,7 +173,7 @@ def _failure_payload(
         "plan_sha256": plan_sha256,
         "error_type": type(error).__name__,
         "error_message": str(error),
-        "created_at": datetime.now(UTC).isoformat(),
+        "created_at": datetime.now(timezone.utc).isoformat(),
     }
 
 
@@ -274,7 +274,7 @@ def run_job(
             "plan_sha256": plan_sha256,
             "extractor_result": dict(extractor_result or {}),
             "outputs": summary_payload(summary),
-            "created_at": datetime.now(UTC).isoformat(),
+            "created_at": datetime.now(timezone.utc).isoformat(),
         }
         _write_json_atomic(staging_dir / "derivation_provenance.json", provenance)
 

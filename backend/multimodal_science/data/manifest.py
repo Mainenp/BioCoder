@@ -6,7 +6,7 @@ import json
 import xml.etree.ElementTree as ET
 from collections import Counter, defaultdict
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -277,7 +277,7 @@ def build_manifest(
         )
     report = {
         "dataset_version": dataset_version,
-        "created_at": datetime.now(UTC).isoformat(),
+        "created_at": datetime.now(timezone.utc).isoformat(),
         "source_archive_sha256": archive_hash,
         "manifest_file": manifest_path.name,
         "manifest_sha256": sha256_file(manifest_path),
