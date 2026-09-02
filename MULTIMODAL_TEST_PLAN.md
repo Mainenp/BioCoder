@@ -72,6 +72,12 @@ Status: planned. A requirement is complete only when its linked checks pass with
   and provenance hashes to one asset identity.
 - Scalar normalization is fit on train only; validation statistics cannot affect transforms.
 - Image and sequence peak boundaries must agree in the shared normalized ROI coordinate system.
+- Qwen3-VL train records follow the official one-image conversation contract and contain exactly
+  one `<image>` token; visual tokens are forbidden in answers.
+- Validation prompts contain no reference answer. Their answer key is a separate hashed artifact,
+  and the builder exposes no internal-test input surface.
+- Reports distinguish unique source assets and source mzML groups from correlated multi-task
+  instruction rows; derived row counts cannot be claimed as independent samples.
 
 ### T20-T22 — Training integration
 
@@ -85,6 +91,9 @@ Status: planned. A requirement is complete only when its linked checks pass with
   ineligible until sealed internal-test and all T23 evidence exists.
 - The sequence runner has no internal-test input surface and defaults to CPU unless CUDA is
   explicitly selected.
+- A sequence run is not accepted until an independent, checkpoint-safe validator reproduces its
+  threshold, classification metrics, physical boundary metrics, and source-grouped bootstrap from
+  saved per-asset predictions and verifies every artifact hash.
 
 ## Evaluation checks
 

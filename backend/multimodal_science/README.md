@@ -290,11 +290,55 @@ quantification, and declared multimodal-ablation evidence exists. Model checkpoi
 epoch history, validation predictions, threshold, code revision, runtime versions, and dataset
 hashes are published together.
 
+Treat the report as a claim to be checked, not as self-validating evidence. After a run finishes,
+the independent validator verifies every artifact hash and recomputes threshold selection,
+classification metrics, physical and normalized boundary metrics, and source-grouped bootstrap
+intervals from the saved per-asset predictions. It deliberately hashes but never deserializes the
+PyTorch checkpoint:
+
+```bash
+python -m multimodal_science.baselines.validate_sequence_run_cli \
+  --run-dir "<external-run-root>/sequence-seed17" \
+  --dataset-root "<external-dataset-root>/multimodal-v1"
+```
+
+The command refuses to overwrite an existing verification report. Older runs whose prediction
+records predate the required `roi_width_minutes` evidence must be rerun; physical-time metrics
+cannot be reconstructed safely without it.
+
+## Qwen3-VL instruction and evaluation data
+
+The instruction builder consumes only the hash-verified unified Dataset. It verifies every
+declared Dataset artifact, rechecks train/validation source-group separation, and creates four
+declared task families: image-only peak presence, image-plus-metadata peak presence, positive-only
+peak grounding, and deterministic scientific QC. Run it without opening the sealed internal test:
+
+```bash
+python -m multimodal_science.qwen3vl.build_instruction_cli \
+  --dataset-root "<external-dataset-root>/multimodal-v1" \
+  --output-dir "<external-dataset-root>/qwen3vl-instructions-v1"
+```
+
+`train_qwen.jsonl` follows the official Qwen3-VL single-image `image` plus `conversations`
+contract, with exactly one `<image>` token in each human message and no visual tokens in model
+answers. The format is grounded in the
+[official Qwen3-VL fine-tuning documentation](https://github.com/QwenLM/Qwen3-VL/blob/main/qwen-vl-finetune/README.md).
+Validation is deliberately not emitted as another SFT file: `validation_prompts.jsonl` contains
+model inputs with no answers, while `validation_answers.jsonl` is a separately hashed evaluation
+key. `instruction_manifest.jsonl` maps every derived row to the original asset, source mzML group,
+image hash, Dataset hash, task, modalities, and supervision source.
+
+Multi-task rows are correlated views of the same source assets. The report therefore records
+source assets and derived instruction rows separately; instruction count must never be presented
+as the number of independent chromatograms or images. Image paths remain relative to the external
+asset root, and image bytes are neither copied nor committed.
+
 ## Current boundary
 
 This phase has produced deterministic splits, hash-verified extraction jobs, a private-source
 adapter, an atomic execution boundary, and a complete train-plus-validation ROI/XIC/COCO index for
-dataset version `raw-072fee8e`. The unified Dataset loader and source-grouped metric definitions are
-implemented, along with a PyTorch residual 1D training runner; trained baseline results are not yet
-claimed. Internal-test extraction, Qwen3-VL training, scientific benchmark runs, and agent-tool
-integration remain downstream milestones in `MULTIMODAL_ROADMAP.md`.
+dataset version `raw-072fee8e`. The unified Dataset loader, source-grouped metrics, PyTorch residual
+1D runner, independent run validator, and Qwen3-VL instruction/evaluation builder are implemented.
+No trained baseline or Qwen3-VL result is claimed yet. Instruction materialization, internal-test
+extraction, model training, scientific benchmark runs, and agent-tool integration remain
+downstream milestones in `MULTIMODAL_ROADMAP.md`.

@@ -88,6 +88,7 @@ class SequenceBaselineContractTests(unittest.TestCase):
 
         self.assertEqual(records[0]["asset_id"], "asset-0")
         self.assertEqual(records[0]["group_id"], "source-0")
+        self.assertEqual(records[0]["roi_width_minutes"], 1.0)
         self.assertTrue(records[0]["target_peak_present"])
         self.assertAlmostEqual(records[0]["target_start_normalized"], 0.2)
         self.assertIsNone(records[1]["target_start_normalized"])

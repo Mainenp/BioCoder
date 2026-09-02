@@ -273,6 +273,7 @@ def _prediction_records(
                 "presence_probability": float(probabilities[row]),
                 "start_normalized": float(boundaries[row, 0]),
                 "end_normalized": float(boundaries[row, 1]),
+                "roi_width_minutes": float(split.roi_width_minutes[row]),
                 "target_peak_present": target_present,
                 "target_start_normalized": (
                     float(split.targets[row, 1]) if target_present else None

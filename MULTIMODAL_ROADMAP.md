@@ -2,8 +2,9 @@
 
 Status: Phase A manifest audit, Phase A-plus group splitting, the complete train-plus-validation
 ROI/XIC/COCO build, and unified 160-point Dataset materialization are verified. The sequence
-training runner is implemented, but internal-test extraction, completed model runs, and benchmark
-results are not yet complete.
+training runner, independent run validator, and Qwen3-VL instruction/evaluation builder are
+implemented. Instruction materialization, internal-test extraction, completed model runs, and
+benchmark results are not yet complete.
 
 ## Verified Phase A snapshot
 
