@@ -357,6 +357,39 @@ Model inference must write one complete JSONL prediction record per validation p
 {"schema_version":"chrompeak-qwen3vl-prediction-v1","instruction_id":"<24-hex-id>","response":"<raw-model-response>"}
 ```
 
+Do not point a model process at the instruction Dataset, because that directory also contains the
+answer key. First publish a separately hash-bound, prompt-only inference bundle:
+
+```bash
+python -m multimodal_science.qwen3vl.build_inference_bundle_cli \
+  --instruction-root "<external-dataset-root>/qwen3vl-instructions-v2-bilingual" \
+  --instruction-report-sha256 "<expected-64-hex-digest>" \
+  --output-dir "<external-dataset-root>/qwen3vl-inference-bundle-v2"
+```
+
+The bundle builder opens the instruction report and validation prompts only. Its report attests
+that it neither opened nor materialized the answer key or instruction manifest. The inference
+runner accepts this bundle and the external image root, but has no instruction-Dataset, answer-key,
+or internal-test argument:
+
+```bash
+python -m multimodal_science.qwen3vl.run_inference_cli \
+  --bundle-root "<external-dataset-root>/qwen3vl-inference-bundle-v2" \
+  --bundle-report-sha256 "<expected-64-hex-digest>" \
+  --assets-root "<external-assets-root>" \
+  --output-dir "<external-run-root>/qwen3vl-zero-shot" \
+  --model-name-or-path "<Qwen3-VL-checkpoint>" \
+  --model-revision "<immutable-commit-or-revision>" \
+  --batch-size 1 \
+  --resume
+```
+
+The current runner follows the official Transformers Qwen3-VL interface and therefore requires
+`transformers>=4.57.0`. It records the resolved model revision, package/runtime metadata, decoding
+configuration, prompt/image/response hashes, prompt order, and raw model response for every row.
+Interrupted runs retain a verified journal and may resume with exactly the same configuration.
+Sample-capped smoke runs remain development-comparison ineligible.
+
 The evaluator joins predictions to the separately hashed answer key only after generation. It
 requires exact validation-ID coverage, rejects duplicate or unknown IDs and tampered instruction
 artifacts, and scores malformed or schema-invalid model responses as failures rather than dropping
@@ -364,9 +397,11 @@ them. Run it without an internal-test input surface:
 
 ```bash
 python -m multimodal_science.qwen3vl.evaluate_predictions_cli \
-  --instruction-root "<external-dataset-root>/qwen3vl-instructions-v1" \
+  --instruction-root "<external-dataset-root>/qwen3vl-instructions-v2-bilingual" \
   --instruction-report-sha256 "<expected-64-hex-digest>" \
-  --predictions "<external-run-root>/validation_predictions.jsonl" \
+  --predictions "<external-run-root>/qwen3vl-zero-shot/predictions.jsonl" \
+  --generation-report "<external-run-root>/qwen3vl-zero-shot/generation_report.json" \
+  --generation-report-sha256 "<expected-64-hex-digest>" \
   --output-dir "<external-run-root>/qwen3vl-evaluation" \
   --bootstrap-iterations 1000 \
   --seed 17
@@ -379,23 +414,26 @@ For bilingual v2, the same evaluator additionally reports every task separately 
 `zh-CN`, plus paired cross-language exact consistency and grounding-box consistency. The report
 intentionally does not collapse heterogeneous tasks into one combined score. Each run binds the
 prediction file, prompts, answer key, instruction manifest, instruction report, and source Dataset
-report by SHA-256. Until a model-inference runner also provides independently verifiable generation
-provenance, evaluator-only reports remain ineligible for development comparisons; file separation
-alone cannot prove that generation never accessed the answer key.
+report by SHA-256. Development-comparison eligibility additionally requires a full, uncapped
+Transformers generation run, an immutable model identity, and a generation report whose per-row
+task, image, image hash, prompt hash, language, pair ID, response, and ordering all match the
+evaluation inputs. Evaluator-only and oracle reports remain ineligible; file separation alone
+cannot prove clean model generation.
 
 ## Current boundary
 
 This phase has produced deterministic splits, hash-verified extraction jobs, a private-source
 adapter, an atomic execution boundary, and a complete train-plus-validation ROI/XIC/COCO index for
 dataset version `raw-072fee8e`. The unified Dataset loader, source-grouped metrics, PyTorch residual
-1D runner, independent run validator, Qwen3-VL instruction builder, and hash-bound prediction
-evaluator are implemented.
-A verified external materialization contains 16,170 independent ROI assets, 54,335 train
-instructions, and 6,854 answer-separated validation instructions; its report SHA-256 is
-`972d2bafe8fad409f2d472732c4a8ab04acd2a42552d17e6f2aad4b388eb560b`. These artifacts remain
-outside Git. The bilingual v2 builder and evaluator contract are implemented but have not yet been
-materialized against that external Dataset. No comparison-eligible trained baseline or Qwen3-VL
-result is claimed yet. Full
-baseline training, provenance-bound Qwen inference and training, internal-test extraction,
+1D runner, independent run validator, bilingual Qwen3-VL instruction builder, prompt-only inference
+bundle, resumable Transformers inference runner, and provenance-gated evaluator are implemented.
+A verified external bilingual materialization contains 16,170 independent ROI assets, 54,335 train
+instructions, and 13,708 parallel answer-separated validation instructions; its report SHA-256 is
+`3c414f0937c9797538b5bae5c656c84ba45b5132ef52d07dd6648037dc1e4fb8`. The 6,854 semantic
+validation pairs comprise correlated `en` and `zh-CN` views and are not extra scientific samples.
+These artifacts remain outside Git. The oracle contract evaluation passed all structural checks,
+but is deliberately development- and final-benchmark-ineligible. No comparison-eligible trained
+baseline or Qwen3-VL result is claimed yet. Full baseline training, real provenance-bound Qwen
+inference and training, internal-test extraction,
 scientific benchmark runs, and agent-tool integration remain downstream milestones in
 `MULTIMODAL_ROADMAP.md`.

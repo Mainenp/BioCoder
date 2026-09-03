@@ -90,9 +90,14 @@ Status: planned. A requirement is complete only when its linked checks pass with
 - Bilingual evaluations report task metrics independently for `en` and `zh-CN`. Every semantic
   validation pair contributes to a cross-language consistency rate; invalid output makes the pair
   inconsistent, and grounding additionally reports prediction-to-prediction box IoU.
-- File separation alone does not establish clean prediction generation. Evaluation remains
-  development-comparison ineligible until a generation manifest binds the model/checkpoint,
-  decoding configuration, prompt hash, prediction hash, and no-answer-access attestation.
+- Model generation consumes a separately published prompt-only bundle. Its CLI exposes no
+  instruction-Dataset, answer-key, instruction-manifest, or internal-test input surface.
+- A resumable generation journal binds each instruction ID to its task, image and prompt hashes,
+  language/pair identity, raw response, and response hash in original prompt order.
+- Evaluation remains development-comparison ineligible unless it independently verifies full,
+  uncapped Transformers generation, `transformers>=4.57.0`, immutable model identity, all artifact
+  hashes, the no-answer-access contracts, and every per-row generation record.
+- Oracle and evaluator-only reports validate contracts but are never model-quality claims.
 - Reports distinguish unique source assets and source mzML groups from correlated multi-task
   instruction rows; derived row counts cannot be claimed as independent samples.
 

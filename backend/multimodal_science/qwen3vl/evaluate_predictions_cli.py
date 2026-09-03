@@ -15,6 +15,8 @@ def parser() -> argparse.ArgumentParser:
     command.add_argument("--predictions", type=Path, required=True)
     command.add_argument("--output-dir", type=Path, required=True)
     command.add_argument("--instruction-report-sha256", required=True)
+    command.add_argument("--generation-report", type=Path)
+    command.add_argument("--generation-report-sha256")
     command.add_argument("--bootstrap-iterations", type=int, default=1000)
     command.add_argument("--seed", type=int, default=17)
     return command
@@ -29,6 +31,8 @@ def main() -> None:
         expected_instruction_report_sha256=arguments.instruction_report_sha256,
         bootstrap_iterations=arguments.bootstrap_iterations,
         seed=arguments.seed,
+        generation_report_path=arguments.generation_report,
+        expected_generation_report_sha256=arguments.generation_report_sha256,
     )
     print(
         json.dumps(
@@ -40,6 +44,12 @@ def main() -> None:
                 "valid_json_records": result.valid_json_records,
                 "schema_valid_records": result.schema_valid_records,
                 "validation_source_groups": result.validation_source_groups,
+                "generation_provenance_verified": (
+                    result.generation_provenance_verified
+                ),
+                "development_comparison_eligible": (
+                    result.development_comparison_eligible
+                ),
                 "internal_test_accessed": False,
             },
             ensure_ascii=False,

@@ -68,7 +68,7 @@ The repository includes SFT and DPO entry points and a GRPO reward scaffold. Tra
 
 ## Roadmap: scientific multimodal chromatography
 
-BioCoder is implementing an LC-MS multimodal workflow under the public project name `ChromPeakFormer`. Its verified data substrate now contains a leakage-resistant, provenance-tracked train and validation index of aligned chromatogram ROI images, RT-intensity sequences, transition metadata, and peak annotations. Reproducible sequence training, independent run verification, and leakage-resistant Qwen3-VL instruction-building code are implemented; completed model runs, specialist-tool integration, and domain-adapted Qwen3-VL results remain evidence-gated downstream milestones.
+BioCoder is implementing an LC-MS multimodal workflow under the public project name `ChromPeakFormer`. Its verified data substrate now contains a leakage-resistant, provenance-tracked train and validation index of aligned chromatogram ROI images, RT-intensity sequences, transition metadata, and peak annotations. Reproducible sequence training, independent run verification, bilingual Qwen3-VL instruction data, a prompt-only inference boundary, resumable model generation, and provenance-gated evaluation are implemented; completed model runs, specialist-tool integration, and domain-adapted Qwen3-VL results remain evidence-gated downstream milestones.
 
 This roadmap is explicitly evidence-gated: tool integration, Qwen3-VL LoRA training, numerical-signal fusion, scientific evaluation, and public metric claims are treated as separate milestones. Planned work is not presented as completed capability.
 

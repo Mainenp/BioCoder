@@ -17,6 +17,9 @@ import numpy as np
 
 from multimodal_science.baselines.metrics import binary_metrics, grouped_bootstrap_binary
 from multimodal_science.data.manifest import sha256_file
+from multimodal_science.qwen3vl.generation_provenance import (
+    verify_generation_provenance,
+)
 from multimodal_science.qwen3vl.instruction_data import (
     BILINGUAL_DATASET_SCHEMA,
     BILINGUAL_MANIFEST_SCHEMA,
@@ -50,6 +53,8 @@ class QwenEvaluationResult:
     valid_json_records: int
     schema_valid_records: int
     validation_source_groups: int
+    generation_provenance_verified: bool
+    development_comparison_eligible: bool
 
 
 def _require(condition: bool, message: str) -> None:
@@ -421,6 +426,8 @@ def evaluate_qwen_predictions(
     expected_instruction_report_sha256: str,
     bootstrap_iterations: int = 1000,
     seed: int = 17,
+    generation_report_path: Path | None = None,
+    expected_generation_report_sha256: str | None = None,
 ) -> QwenEvaluationResult:
     """Evaluate a complete prediction file without exposing answers during generation."""
 
@@ -434,6 +441,10 @@ def evaluate_qwen_predictions(
     _require(
         bool(_HEX_64.fullmatch(expected_instruction_report_sha256)),
         "Expected instruction report SHA-256 must be lowercase hexadecimal",
+    )
+    _require(
+        (generation_report_path is None) == (expected_generation_report_sha256 is None),
+        "Generation report path and SHA-256 must be provided together",
     )
 
     report_path = instruction_root / "instruction_dataset_report.json"
@@ -595,6 +606,43 @@ def evaluate_qwen_predictions(
         _require(
             isinstance(prediction.get("response"), str),
             "Prediction response must be a string",
+        )
+
+    generation_verification = None
+    if generation_report_path is not None:
+        expected_generation_records = {}
+        for instruction_id in expected_ids:
+            prompt = prompt_by_id[instruction_id]
+            manifest = manifest_by_id[instruction_id]
+            message = _object(prompt["conversations"][0], "validation prompt message")
+            expected_generation_records[instruction_id] = {
+                "task": manifest["task"],
+                "image": manifest["image_path"],
+                "image_sha256": manifest["image_sha256"],
+                "prompt_sha256": hashlib.sha256(
+                    str(message["value"]).encode("utf-8")
+                ).hexdigest(),
+                "language": manifest.get("language"),
+                "pair_id": manifest.get("pair_id"),
+            }
+        generation_verification = verify_generation_provenance(
+            generation_report_path,
+            predictions_path,
+            expected_generation_report_sha256=str(
+                expected_generation_report_sha256
+            ),
+            instruction_report_sha256=instruction_report_sha256,
+            validation_prompts_sha256=_object(
+                _object(instruction_report["artifacts"], "artifacts")[
+                    "validation_prompts"
+                ],
+                "validation prompts artifact",
+            )["sha256"],
+            source_dataset_report_sha256=_object(
+                instruction_report.get("source_dataset"), "source dataset"
+            )["dataset_report_sha256"],
+            expected_prediction_records=len(expected_ids),
+            expected_records_by_id=expected_generation_records,
         )
 
     evidence = []
@@ -806,6 +854,23 @@ def evaluate_qwen_predictions(
             "development_comparison_eligible": False,
             "final_benchmark_eligible": False,
         }
+        if generation_verification is not None:
+            evaluation_report["inputs"]["generation_report_sha256"] = (
+                generation_verification.report_sha256
+            )
+            evaluation_report["generation_provenance"] = {
+                "report_sha256": generation_verification.report_sha256,
+                "backend": generation_verification.backend,
+                "prediction_records": generation_verification.prediction_records,
+                "generation_records": generation_verification.generation_records,
+                "model_identity_immutable": (
+                    generation_verification.model_identity_immutable
+                ),
+            }
+            evaluation_report["prediction_generation_provenance_verified"] = True
+            evaluation_report["development_comparison_eligible"] = (
+                generation_verification.development_comparison_eligible
+            )
         if bilingual:
             evaluation_report["evaluation"].update(
                 {
@@ -833,4 +898,10 @@ def evaluate_qwen_predictions(
         valid_json_records=sum(bool(row["valid_json"]) for row in evidence),
         schema_valid_records=sum(bool(row["schema_valid"]) for row in evidence),
         validation_source_groups=len({str(row["group_id"]) for row in evidence}),
+        generation_provenance_verified=generation_verification is not None,
+        development_comparison_eligible=(
+            generation_verification.development_comparison_eligible
+            if generation_verification is not None
+            else False
+        ),
     )

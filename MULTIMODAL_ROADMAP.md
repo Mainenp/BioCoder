@@ -3,7 +3,9 @@
 Status: Phase A manifest audit, Phase A-plus group splitting, the complete train-plus-validation
 ROI/XIC/COCO build, and unified 160-point Dataset materialization are verified. The sequence
 training runner, independent run validator, and Qwen3-VL instruction/evaluation builder are
-implemented. Instruction materialization, internal-test extraction, completed model runs, and
+implemented. The bilingual instruction Dataset has been materialized externally and its oracle
+evaluation contract verified. A prompt-only inference bundle, resumable Transformers runner, and
+generation-provenance gate are implemented; real model runs, internal-test extraction, and
 benchmark results are not yet complete.
 
 ## Verified Phase A snapshot

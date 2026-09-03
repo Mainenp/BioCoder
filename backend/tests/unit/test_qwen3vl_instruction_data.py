@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import tempfile
 import unittest
@@ -8,6 +9,9 @@ from pathlib import Path
 import numpy as np
 
 from multimodal_science.data.manifest import sha256_file
+from multimodal_science.qwen3vl.build_inference_bundle_cli import (
+    parser as inference_bundle_parser,
+)
 from multimodal_science.qwen3vl.build_instruction_cli import parser
 from multimodal_science.qwen3vl.evaluate_predictions_cli import parser as evaluation_parser
 from multimodal_science.qwen3vl.evaluation import (
@@ -21,6 +25,18 @@ from multimodal_science.qwen3vl.instruction_data import (
     TASKS,
     build_instruction_dataset,
 )
+from multimodal_science.qwen3vl.inference_bundle import (
+    BUNDLE_PROMPT_SCHEMA,
+    BUNDLE_SCHEMA,
+    build_inference_bundle,
+)
+from multimodal_science.qwen3vl.inference import (
+    GENERATION_REPORT_SCHEMA,
+    GenerationSettings,
+    PromptRequest,
+    run_qwen_inference,
+)
+from multimodal_science.qwen3vl.run_inference_cli import parser as inference_parser
 
 
 def write_json(path: Path, payload: object) -> None:
@@ -36,6 +52,11 @@ def write_jsonl(path: Path, records: list[dict[str, object]]) -> None:
 
 
 def example(split: str, row: int, *, present: bool, group: str) -> dict[str, object]:
+    image_sha256 = (
+        hashlib.sha256(b"test-jpeg-" + str(row).encode("ascii")).hexdigest()
+        if split == "validation"
+        else f"{row + 1:x}" * 64
+    )
     return {
         "schema_version": "chrompeak-multimodal-example-v1",
         "row": row,
@@ -45,7 +66,7 @@ def example(split: str, row: int, *, present: bool, group: str) -> dict[str, obj
         "group_id": group,
         "image": {
             "path": f"jobs/{split}/{group}/roi-{row}.jpeg",
-            "sha256": f"{row + 1:x}" * 64,
+            "sha256": image_sha256,
             "width": 400,
             "height": 300,
         },
@@ -158,6 +179,54 @@ def make_dataset(root: Path, *, leak_group: bool = False) -> Path:
         },
     )
     return dataset
+
+
+def make_validation_assets(root: Path) -> Path:
+    assets = root / "assets"
+    for row, group in enumerate(("validation-source-0", "validation-source-1")):
+        path = assets / "jobs" / "validation" / group / f"roi-{row}.jpeg"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"test-jpeg-" + str(row).encode("ascii"))
+    return assets
+
+
+class FakeQwenGenerator:
+    def __init__(
+        self,
+        *,
+        fail_after_calls: int | None = None,
+        backend: str = "test-double",
+    ) -> None:
+        self.calls = 0
+        self.fail_after_calls = fail_after_calls
+        self._metadata = {
+            "backend": backend,
+            "transformers_version": "4.57.1",
+            "torch_version": "test",
+            "resolved_model_revision": "a" * 40,
+            "model_class": "FakeQwenGenerator",
+        }
+
+    @property
+    def metadata(self) -> dict[str, object]:
+        return dict(self._metadata)
+
+    def generate(
+        self,
+        requests: list[PromptRequest],
+        settings: GenerationSettings,
+    ) -> list[str]:
+        del settings
+        self.calls += 1
+        if self.fail_after_calls is not None and self.calls > self.fail_after_calls:
+            raise RuntimeError("simulated interruption")
+        return [
+            json.dumps(
+                {"instruction_id_seen": request.instruction_id},
+                separators=(",", ":"),
+            )
+            for request in requests
+        ]
 
 
 def read_jsonl(path: Path) -> list[dict[str, object]]:
@@ -342,6 +411,191 @@ class Qwen3VLInstructionDataTests(unittest.TestCase):
         self.assertNotIn("internal_test", destinations)
 
 
+class Qwen3VLInferenceBundleTests(unittest.TestCase):
+    def test_builds_prompt_only_bilingual_bundle_without_reading_answers(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            instructions = root / "instructions"
+            build_instruction_dataset(
+                make_dataset(root),
+                instructions,
+                language_profile="bilingual",
+            )
+            instruction_report_hash = sha256_file(
+                instructions / "instruction_dataset_report.json"
+            )
+            with (instructions / "validation_answers.jsonl").open(
+                "a", encoding="utf-8"
+            ) as stream:
+                stream.write("tampered but deliberately unopened\n")
+
+            result = build_inference_bundle(
+                instructions,
+                root / "bundle",
+                expected_instruction_report_sha256=instruction_report_hash,
+            )
+
+            report = json.loads(result.report_path.read_text(encoding="utf-8"))
+            prompts = read_jsonl(root / "bundle" / "inference_prompts.jsonl")
+            bundle_text = (root / "bundle" / "inference_prompts.jsonl").read_text(
+                encoding="utf-8"
+            )
+            self.assertEqual(report["schema_version"], BUNDLE_SCHEMA)
+            self.assertEqual(result.prompt_records, 14)
+            self.assertEqual(report["counts"]["by_language"], {"en": 7, "zh-CN": 7})
+            self.assertTrue(report["contracts"]["prompt_only"])
+            self.assertFalse(report["contracts"]["answer_key_opened"])
+            self.assertFalse(report["contracts"]["answer_key_materialized"])
+            self.assertEqual(set(report["artifacts"]), {"inference_prompts"})
+            self.assertTrue(
+                all(record["schema_version"] == BUNDLE_PROMPT_SCHEMA for record in prompts)
+            )
+            self.assertNotIn("expected_response", bundle_text)
+            self.assertNotIn("response_sha256", bundle_text)
+
+    def test_bundle_cli_exposes_no_answer_or_internal_test_path(self) -> None:
+        command = inference_bundle_parser()
+        destinations = {action.dest for action in command._actions}
+        arguments = command.parse_args(
+            [
+                "--instruction-root",
+                "instructions",
+                "--output-dir",
+                "bundle",
+                "--instruction-report-sha256",
+                "a" * 64,
+            ]
+        )
+
+        self.assertEqual(arguments.output_dir, Path("bundle"))
+        self.assertNotIn("answer", destinations)
+        self.assertNotIn("answers", destinations)
+        self.assertNotIn("test", destinations)
+        self.assertNotIn("internal_test", destinations)
+
+
+class Qwen3VLInferenceRunnerTests(unittest.TestCase):
+    def _bundle(self, root: Path) -> tuple[Path, str]:
+        instructions = root / "instructions"
+        build_instruction_dataset(
+            make_dataset(root),
+            instructions,
+            language_profile="bilingual",
+        )
+        bundle = root / "bundle"
+        result = build_inference_bundle(
+            instructions,
+            bundle,
+            expected_instruction_report_sha256=sha256_file(
+                instructions / "instruction_dataset_report.json"
+            ),
+        )
+        return bundle, result.report_sha256
+
+    def test_runs_prompt_only_generation_and_emits_provenance(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            bundle, bundle_hash = self._bundle(root)
+            assets = make_validation_assets(root)
+            fake = FakeQwenGenerator()
+
+            result = run_qwen_inference(
+                bundle,
+                assets,
+                root / "run",
+                expected_bundle_report_sha256=bundle_hash,
+                model_name_or_path="Qwen/test-model",
+                model_revision="a" * 40,
+                settings=GenerationSettings(batch_size=2),
+                max_records=3,
+                generator_factory=lambda *_: fake,
+            )
+
+            report = json.loads(result.report_path.read_text(encoding="utf-8"))
+            predictions = read_jsonl(result.predictions_path)
+            evidence = read_jsonl(result.output_dir / "generation_records.jsonl")
+            self.assertEqual(report["schema_version"], GENERATION_REPORT_SCHEMA)
+            self.assertEqual(result.prediction_records, 3)
+            self.assertFalse(result.complete_prompt_coverage)
+            self.assertFalse(result.development_comparison_candidate)
+            self.assertEqual(len(predictions), 3)
+            self.assertEqual(len(evidence), 3)
+            self.assertEqual(report["counts"]["unique_images_opened"], 1)
+            self.assertTrue(report["contracts"]["input_is_prompt_only_bundle"])
+            self.assertFalse(report["contracts"]["answer_key_available_to_runner"])
+            self.assertFalse(report["internal_test_accessed"])
+
+    def test_resumes_from_a_verified_prompt_prefix(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            bundle, bundle_hash = self._bundle(root)
+            assets = make_validation_assets(root)
+            output = root / "resumed-run"
+            settings = GenerationSettings(batch_size=1)
+            interrupted = FakeQwenGenerator(fail_after_calls=1)
+
+            with self.assertRaisesRegex(RuntimeError, "simulated interruption"):
+                run_qwen_inference(
+                    bundle,
+                    assets,
+                    output,
+                    expected_bundle_report_sha256=bundle_hash,
+                    model_name_or_path="Qwen/test-model",
+                    model_revision="a" * 40,
+                    settings=settings,
+                    max_records=3,
+                    generator_factory=lambda *_: interrupted,
+                )
+
+            journal = root / ".resumed-run.work" / "generation_records.jsonl"
+            self.assertEqual(len(read_jsonl(journal)), 1)
+            resumed = FakeQwenGenerator()
+            result = run_qwen_inference(
+                bundle,
+                assets,
+                output,
+                expected_bundle_report_sha256=bundle_hash,
+                model_name_or_path="Qwen/test-model",
+                model_revision="a" * 40,
+                settings=settings,
+                max_records=3,
+                resume=True,
+                generator_factory=lambda *_: resumed,
+            )
+
+            self.assertEqual(result.prediction_records, 3)
+            self.assertEqual(resumed.calls, 2)
+            self.assertFalse((root / ".resumed-run.work").exists())
+            self.assertTrue(output.is_dir())
+
+    def test_inference_cli_has_no_answer_instruction_or_internal_test_path(self) -> None:
+        command = inference_parser()
+        destinations = {action.dest for action in command._actions}
+        arguments = command.parse_args(
+            [
+                "--bundle-root",
+                "bundle",
+                "--bundle-report-sha256",
+                "a" * 64,
+                "--assets-root",
+                "assets",
+                "--output-dir",
+                "run",
+                "--model-name-or-path",
+                "Qwen/model",
+                "--model-revision",
+                "b" * 40,
+            ]
+        )
+
+        self.assertEqual(arguments.batch_size, 1)
+        self.assertNotIn("instruction_root", destinations)
+        self.assertNotIn("answer", destinations)
+        self.assertNotIn("answers", destinations)
+        self.assertNotIn("test", destinations)
+        self.assertNotIn("internal_test", destinations)
+
+
 class Qwen3VLEvaluationTests(unittest.TestCase):
     def _perfect_predictions(self, instructions: Path, path: Path) -> list[dict[str, object]]:
         answers = read_jsonl(instructions / "validation_answers.jsonl")
@@ -393,6 +647,80 @@ class Qwen3VLEvaluationTests(unittest.TestCase):
             self.assertFalse(report["final_benchmark_eligible"])
             self.assertFalse(report["internal_test_accessed"])
             self.assertFalse(report["prediction_generation_provenance_verified"])
+
+    def test_qualifies_only_complete_hash_bound_transformers_generation(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            instructions = root / "instructions"
+            build_instruction_dataset(
+                make_dataset(root),
+                instructions,
+                language_profile="bilingual",
+            )
+            instruction_report_hash = sha256_file(
+                instructions / "instruction_dataset_report.json"
+            )
+            bundle = root / "bundle"
+            bundle_result = build_inference_bundle(
+                instructions,
+                bundle,
+                expected_instruction_report_sha256=instruction_report_hash,
+            )
+            generation = run_qwen_inference(
+                bundle,
+                make_validation_assets(root),
+                root / "generation",
+                expected_bundle_report_sha256=bundle_result.report_sha256,
+                model_name_or_path="Qwen/test-model",
+                model_revision="a" * 40,
+                settings=GenerationSettings(batch_size=3),
+                generator_factory=lambda *_: FakeQwenGenerator(
+                    backend="transformers"
+                ),
+            )
+
+            result = evaluate_qwen_predictions(
+                instructions,
+                generation.predictions_path,
+                root / "evaluation",
+                expected_instruction_report_sha256=instruction_report_hash,
+                generation_report_path=generation.report_path,
+                expected_generation_report_sha256=generation.report_sha256,
+                bootstrap_iterations=20,
+            )
+            report = json.loads(result.report_path.read_text(encoding="utf-8"))
+
+            self.assertTrue(result.generation_provenance_verified)
+            self.assertTrue(result.development_comparison_eligible)
+            self.assertTrue(report["prediction_generation_provenance_verified"])
+            self.assertTrue(report["development_comparison_eligible"])
+            self.assertEqual(report["counts"]["predictions"], 14)
+            self.assertEqual(report["counts"]["schema_valid"], 0)
+            self.assertFalse(report["final_benchmark_eligible"])
+
+            evidence_path = generation.output_dir / "generation_records.jsonl"
+            evidence = read_jsonl(evidence_path)
+            evidence[0]["image_sha256"] = "f" * 64
+            write_jsonl(evidence_path, evidence)
+            generation_report = json.loads(
+                generation.report_path.read_text(encoding="utf-8")
+            )
+            generation_report["artifacts"]["generation_records"]["sha256"] = (
+                sha256_file(evidence_path)
+            )
+            write_json(generation.report_path, generation_report)
+            with self.assertRaisesRegex(ValueError, "image_sha256 mismatch"):
+                evaluate_qwen_predictions(
+                    instructions,
+                    generation.predictions_path,
+                    root / "tampered-evaluation",
+                    expected_instruction_report_sha256=instruction_report_hash,
+                    generation_report_path=generation.report_path,
+                    expected_generation_report_sha256=sha256_file(
+                        generation.report_path
+                    ),
+                    bootstrap_iterations=20,
+                )
 
     def test_malformed_json_is_retained_as_a_scored_failure(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
