@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import nullcontext
 import hashlib
 import json
 import tempfile
@@ -34,6 +35,7 @@ from multimodal_science.qwen3vl.inference import (
     GENERATION_REPORT_SCHEMA,
     GenerationSettings,
     PromptRequest,
+    _TransformersGenerator,
     run_qwen_inference,
 )
 from multimodal_science.qwen3vl.run_inference_cli import parser as inference_parser
@@ -234,6 +236,68 @@ def read_jsonl(path: Path) -> list[dict[str, object]]:
 
 
 class Qwen3VLInstructionDataTests(unittest.TestCase):
+    def test_transformers_generator_uses_plain_local_image_paths(self) -> None:
+        class FakeInputs(dict[str, object]):
+            def __init__(self) -> None:
+                super().__init__(input_ids=[[1, 2]])
+                self.input_ids = self["input_ids"]
+
+            def to(self, device: str) -> FakeInputs:
+                self.device = device
+                return self
+
+        class FakeProcessor:
+            def __init__(self) -> None:
+                self.messages: object | None = None
+
+            def apply_chat_template(self, messages: object, **kwargs: object) -> FakeInputs:
+                del kwargs
+                self.messages = messages
+                return FakeInputs()
+
+            def batch_decode(self, token_ids: object, **kwargs: object) -> list[str]:
+                del token_ids, kwargs
+                return ['{"peak_present":true}']
+
+        class FakeModel:
+            device = "cuda:0"
+
+            def generate(self, **kwargs: object) -> list[list[int]]:
+                del kwargs
+                return [[1, 2, 3]]
+
+        class FakeTorch:
+            @staticmethod
+            def inference_mode():
+                return nullcontext()
+
+        with tempfile.TemporaryDirectory() as temporary:
+            image_path = (Path(temporary) / "ROI with spaces.jpeg").resolve()
+            image_path.write_bytes(b"test-image")
+            processor = FakeProcessor()
+            generator = object.__new__(_TransformersGenerator)
+            generator._processor = processor
+            generator._model = FakeModel()
+            generator._torch = FakeTorch()
+
+            responses = generator.generate(
+                [
+                    PromptRequest(
+                        instruction_id="instruction-1",
+                        task="peak_presence",
+                        image_path=image_path,
+                        prompt='<image>\nReturn {"peak_present":true|false}.',
+                    )
+                ],
+                GenerationSettings(),
+            )
+
+            assert isinstance(processor.messages, list)
+            image_reference = processor.messages[0][0]["content"][0]["image"]
+            self.assertEqual(image_reference, str(image_path))
+            self.assertFalse(image_reference.startswith("file://"))
+            self.assertEqual(responses, ['{"peak_present":true}'])
+
     def test_builds_official_train_records_and_answer_separated_validation(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

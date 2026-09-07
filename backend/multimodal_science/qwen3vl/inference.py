@@ -289,7 +289,7 @@ class _TransformersGenerator:
                     {
                         "role": "user",
                         "content": [
-                            {"type": "image", "image": request.image_path.as_uri()},
+                            {"type": "image", "image": str(request.image_path)},
                             {"type": "text", "text": text},
                         ],
                     }
