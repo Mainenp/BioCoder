@@ -460,6 +460,11 @@ test data. Its generation report SHA-256 is
 evaluation report SHA-256 is
 `b3c72b9a4c802a0306cf9fd09fb5cf0867c63ec8770b916cb8a8dd0f6255c183`. This is a baseline,
 not a trained-domain result: 13,001 responses passed their task schema, while the task metrics
-expose class shortcuts, language sensitivity, and grounding failures. Full baseline training,
-Qwen3-VL domain training, internal-test extraction, scientific benchmark runs, and agent-tool
-integration remain downstream milestones in `MULTIMODAL_ROADMAP.md`.
+expose class shortcuts, language sensitivity, and grounding failures. The subsequent immutable
+failure audit has report SHA-256
+`e75cfd910079fd0c5cd588c935b29b269c2f8c10acc644fee403db7a2eb21fab`. It confirms constant
+image-only presence and QC outputs, opposite metadata-driven English/Chinese biases, and no useful
+global `0..1000` reinterpretation: horizontal normalization rescued 698 invalid English boxes but
+improved English mean IoU by only `0.0040` while severely degrading Chinese grounding. Full
+baseline training, Qwen3-VL domain training, internal-test extraction, scientific benchmark runs,
+and agent-tool integration remain downstream milestones in `MULTIMODAL_ROADMAP.md`.

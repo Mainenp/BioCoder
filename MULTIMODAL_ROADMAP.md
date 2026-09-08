@@ -6,7 +6,9 @@ training runner, independent run validator, and Qwen3-VL instruction/evaluation 
 implemented. The bilingual instruction Dataset has been materialized externally and its oracle
 evaluation contract verified. A prompt-only inference bundle, resumable Transformers runner, and
 generation-provenance gate are implemented; real model runs, internal-test extraction, and
-benchmark results are not yet complete.
+benchmark results are not yet complete. A full Qwen3-VL-4B bilingual zero-shot baseline and its
+failure-mode audit are now verified externally; domain training and all sealed-test claims remain
+incomplete.
 
 ## Verified Phase A snapshot
 
@@ -62,6 +64,31 @@ both train and validation, zero validation-only components, and a train-versus-v
 rate gap of `0.008783`. Its deterministic report SHA-256 is
 `5027330265672012b4bc6302187c772014d87bb22f15ba29a890c67ef1e113b4`. This report is bound to the
 asset-index hash above.
+
+## Verified Qwen3-VL zero-shot snapshot
+
+The immutable Qwen3-VL-4B run generated all 13,708 bilingual validation responses for 1,815
+independent assets without accessing internal-test data. Generation and answer-separated
+evaluation are bound respectively to report SHA-256 values
+`f3378e24eabdb3cdc685d351bdce3051d3b63435251226e58391dd93199a489f` and
+`b3c72b9a4c802a0306cf9fd09fb5cf0867c63ec8770b916cb8a8dd0f6255c183`.
+
+The diagnostic audit at report SHA-256
+`e75cfd910079fd0c5cd588c935b29b269c2f8c10acc644fee403db7a2eb21fab` established three failure
+modes:
+
+- image-only peak presence returned `true` for all 3,630 language prompts;
+- scientific QC returned the same `no_peak/no_visible_peak` response for all 3,630 prompts; and
+- metadata prompts were language-sensitive: 1,741/1,815 English responses were positive while
+  1,814/1,815 Chinese responses were negative.
+
+Grounding cannot be repaired by globally reinterpreting outputs as normalized coordinates. The
+formal source-pixel mean IoU was `0.2502`; full `0..1000` normalization reduced it to `0.0276`, and
+horizontal-only normalization reduced it to `0.0620`. For English, horizontal normalization
+rescued 698 source-pixel-invalid boxes but changed mean IoU only from `0.1123` to `0.1163`; for
+Chinese it collapsed mean IoU from `0.3881` to `0.0078`. These are validation diagnostics, not a
+license to select a training protocol. Coordinate and bilingual consistency choices must be made
+on train-derived calibration groups.
 
 The v2 numerical preflight then verified all 16,170 ROI crops across 98 XIC matrices. The unified
 Dataset materializer interpolated each crop on its true RT coordinates to 160 points and atomically
