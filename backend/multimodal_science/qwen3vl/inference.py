@@ -312,6 +312,10 @@ class _TransformersGenerator:
             generation_arguments.update(
                 {"temperature": settings.temperature, "top_p": settings.top_p}
             )
+        else:
+            generation_arguments.update(
+                {"temperature": None, "top_p": None, "top_k": None}
+            )
         with self._torch.inference_mode():
             generated_ids = self._model.generate(**inputs, **generation_arguments)
         trimmed = [

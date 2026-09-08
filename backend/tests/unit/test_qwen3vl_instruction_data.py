@@ -262,8 +262,11 @@ class Qwen3VLInstructionDataTests(unittest.TestCase):
         class FakeModel:
             device = "cuda:0"
 
+            def __init__(self) -> None:
+                self.generation_kwargs: dict[str, object] | None = None
+
             def generate(self, **kwargs: object) -> list[list[int]]:
-                del kwargs
+                self.generation_kwargs = kwargs
                 return [[1, 2, 3]]
 
         class FakeTorch:
@@ -296,6 +299,9 @@ class Qwen3VLInstructionDataTests(unittest.TestCase):
             image_reference = processor.messages[0][0]["content"][0]["image"]
             self.assertEqual(image_reference, str(image_path))
             self.assertFalse(image_reference.startswith("file://"))
+            self.assertIsNone(generator._model.generation_kwargs["temperature"])
+            self.assertIsNone(generator._model.generation_kwargs["top_p"])
+            self.assertIsNone(generator._model.generation_kwargs["top_k"])
             self.assertEqual(responses, ['{"peak_present":true}'])
 
     def test_builds_official_train_records_and_answer_separated_validation(self) -> None:
