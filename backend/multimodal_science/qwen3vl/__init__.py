@@ -17,15 +17,21 @@ from multimodal_science.qwen3vl.inference_bundle import (
     InferenceBundleResult,
     build_inference_bundle,
 )
+from multimodal_science.qwen3vl.zero_shot_audit import (
+    ZeroShotAuditResult,
+    audit_zero_shot_failures,
+)
 
 __all__ = [
     "InstructionDatasetResult",
     "InferenceBundleResult",
     "QwenEvaluationResult",
     "QwenInferenceResult",
+    "ZeroShotAuditResult",
     "GenerationSettings",
     "build_inference_bundle",
     "build_instruction_dataset",
     "evaluate_qwen_predictions",
+    "audit_zero_shot_failures",
     "run_qwen_inference",
 ]

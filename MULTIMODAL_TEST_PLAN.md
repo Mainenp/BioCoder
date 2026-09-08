@@ -100,6 +100,14 @@ Status: planned. A requirement is complete only when its linked checks pass with
 - Oracle and evaluator-only reports validate contracts but are never model-quality claims.
 - Reports distinguish unique source assets and source mzML groups from correlated multi-task
   instruction rows; derived row counts cannot be claimed as independent samples.
+- A zero-shot failure audit accepts only a provenance-verified bilingual evaluation and matching
+  generation report, revalidates their hashes and record identities, and exposes no model or
+  internal-test input surface.
+- Grounding protocol diagnostics retain the formal source-pixel metric while separately scoring
+  full `0..1000` and horizontal-only `0..1000` counterfactual interpretations. Counterfactuals are
+  never development comparisons and cannot overwrite the formal evaluation.
+- Failure-audit reports include per-language output distributions, per-record coordinate evidence,
+  source-grouped uncertainty, and a verifiable artifact manifest.
 
 ### T20-T22 — Training integration
 

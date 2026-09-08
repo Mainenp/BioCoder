@@ -420,6 +420,28 @@ task, image, image hash, prompt hash, language, pair ID, response, and ordering 
 evaluation inputs. Evaluator-only and oracle reports remain ineligible; file separation alone
 cannot prove clean model generation.
 
+After a provenance-verified bilingual zero-shot evaluation, run the failure-mode audit before
+changing prompts, coordinate contracts, or training targets:
+
+```bash
+python -m multimodal_science.qwen3vl.audit_zero_shot_cli \
+  --generation-report "<external-run-root>/qwen3vl-zero-shot/generation_report.json" \
+  --generation-report-sha256 "<expected-64-hex-digest>" \
+  --evaluation-report "<external-run-root>/qwen3vl-evaluation/qwen_evaluation_report.json" \
+  --evaluation-report-sha256 "<expected-64-hex-digest>" \
+  --output-dir "<external-run-root>/qwen3vl-zero-shot-failure-audit" \
+  --bootstrap-iterations 1000 \
+  --seed 17
+```
+
+The audit verifies both upstream report hashes, the prediction artifact, and every evaluation
+record before reporting output distributions by task and language. For grounding it compares the
+formal source-pixel score with two read-only counterfactuals: a full `0..1000` normalized box and
+an `x`-normalized box whose fixed full-height `y` coordinates remain in source pixels. It emits
+per-record evidence, source-grouped mean-IoU intervals, and a `sha256sum -c` compatible manifest.
+Counterfactual metrics are diagnostic only: they do not replace the immutable formal zero-shot
+result and must not be used to select a training protocol on validation data.
+
 ## Current boundary
 
 This phase has produced deterministic splits, hash-verified extraction jobs, a private-source
@@ -431,9 +453,13 @@ A verified external bilingual materialization contains 16,170 independent ROI as
 instructions, and 13,708 parallel answer-separated validation instructions; its report SHA-256 is
 `3c414f0937c9797538b5bae5c656c84ba45b5132ef52d07dd6648037dc1e4fb8`. The 6,854 semantic
 validation pairs comprise correlated `en` and `zh-CN` views and are not extra scientific samples.
-These artifacts remain outside Git. The oracle contract evaluation passed all structural checks,
-but is deliberately development- and final-benchmark-ineligible. No comparison-eligible trained
-baseline or Qwen3-VL result is claimed yet. Full baseline training, real provenance-bound Qwen
-inference and training, internal-test extraction,
-scientific benchmark runs, and agent-tool integration remain downstream milestones in
-`MULTIMODAL_ROADMAP.md`.
+These artifacts remain outside Git. A full, immutable Qwen3-VL-4B zero-shot run now covers all
+13,708 validation prompts and is eligible for development comparison without accessing internal
+test data. Its generation report SHA-256 is
+`f3378e24eabdb3cdc685d351bdce3051d3b63435251226e58391dd93199a489f`; the answer-separated
+evaluation report SHA-256 is
+`b3c72b9a4c802a0306cf9fd09fb5cf0867c63ec8770b916cb8a8dd0f6255c183`. This is a baseline,
+not a trained-domain result: 13,001 responses passed their task schema, while the task metrics
+expose class shortcuts, language sensitivity, and grounding failures. Full baseline training,
+Qwen3-VL domain training, internal-test extraction, scientific benchmark runs, and agent-tool
+integration remain downstream milestones in `MULTIMODAL_ROADMAP.md`.
