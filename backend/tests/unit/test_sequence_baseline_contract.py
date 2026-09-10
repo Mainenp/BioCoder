@@ -5,7 +5,10 @@ import unittest
 import numpy as np
 
 from multimodal_science.baselines.dataset import SequenceSplit
-from multimodal_science.baselines.sequence_model import SequenceModelSpec
+from multimodal_science.baselines.sequence_model import (
+    SequenceModelSpec,
+    build_sequence_peak_net,
+)
 from multimodal_science.baselines.sequence_training import (
     SequenceTrainConfig,
     _prediction_records,
@@ -65,12 +68,27 @@ class SequenceBaselineContractTests(unittest.TestCase):
         self.assertEqual(metadata.as_dict()["scalar_features"], 7)
         with self.assertRaisesRegex(ValueError, "Unsupported"):
             SequenceModelSpec(modality="image").validate()
+        with self.assertRaisesRegex(ValueError, "divide evenly"):
+            SequenceModelSpec(input_points=159, position_bins=6).validate()
+
+    def test_max_pool_matches_adaptive_pool_without_nondeterministic_kernel(self) -> None:
+        try:
+            import torch
+        except ImportError:
+            self.skipTest("torch is not installed")
+
+        model = build_sequence_peak_net(SequenceModelSpec())
+        encoded = torch.arange(40, dtype=torch.float32).reshape(1, 2, 20)
+        expected = torch.nn.functional.adaptive_max_pool1d(encoded, 10)
+
+        actual = model.maximum_pool(encoded)
+
+        torch.testing.assert_close(actual, expected)
+        self.assertNotIsInstance(model.maximum_pool, torch.nn.AdaptiveMaxPool1d)
 
     def test_cli_defaults_to_cpu_and_exposes_no_internal_test_surface(self) -> None:
         command = parser()
-        arguments = command.parse_args(
-            ["--dataset-root", "dataset", "--output-dir", "run"]
-        )
+        arguments = command.parse_args(["--dataset-root", "dataset", "--output-dir", "run"])
         destinations = {action.dest for action in command._actions}
 
         self.assertEqual(arguments.device, "cpu")

@@ -236,6 +236,78 @@ ROI coordinate system. Images are referenced by their verified relative paths an
 All files are staged and atomically published together, and repeat runs verify artifact hashes
 before returning a cache hit.
 
+## ChromPeakFormer specialist-detector baseline
+
+The specialist detector is evaluated before the sequence-only ablation and any domain-adapted
+Qwen3-VL run. Public BioCoder code owns the split and evidence boundary while the authorized model
+source remains outside Git. First convert the verified index into the exact `train`/`val` layout
+expected by the detector:
+
+```bash
+python -m multimodal_science.chrompeakformer.prepare_detector_cli \
+  --asset-index "<external-index-root>/asset_index.jsonl" \
+  --asset-index-report "<external-index-root>/asset_index_report.json" \
+  --assets-root "<external-asset-root>" \
+  --train-coco "<external-index-root>/train_coco.json" \
+  --validation-coco "<external-index-root>/validation_coco.json" \
+  --output-dir "<external-run-root>/detector-dataset" \
+  --verify-image-hashes
+```
+
+The adapter rejects partial indices, image/annotation drift, duplicate identities, and any source
+`job_id` shared by train and validation. It rewrites only the model-facing image locations; labels,
+image IDs, boxes, and split membership must exactly match the immutable asset index.
+
+Train through the audited external-source launcher. The source config must describe the three-layer
+boundary-refinement variant; a resume checkpoint is accepted only with an explicit SHA-256:
+
+```bash
+python -m multimodal_science.chrompeakformer.train_detector_cli \
+  --source-root "<authorized-detector-source>/model" \
+  --source-config "<authorized-detector-config>" \
+  --detector-dataset-root "<external-run-root>/detector-dataset/coco" \
+  --detector-dataset-report "<external-run-root>/detector-dataset/detector_dataset_report.json" \
+  --detector-dataset-report-sha256 "<dataset-report-sha256>" \
+  --output-dir "<external-run-root>/chrompeakformer-seed17" \
+  --device cuda --seed 17 --epochs 30 --batch-size 16 --num-workers 2
+```
+
+The training report distinguishes the best validation epoch observed in the log from the actual
+final-epoch checkpoint; it never labels the final weights as best weights without matching evidence.
+The peak-width-weighted localization loss is recalibrated from current training annotations only;
+an older config statistic is never reused and validation boxes do not influence that value.
+Use `--smoke-test --epochs 1` for the first scheduled CUDA contract run. Smoke reports are explicitly
+ineligible for development comparisons; omit `--smoke-test` only for a complete declared run.
+Produce standard COCO detections from that checkpoint, pinning both checkpoint and Dataset hashes:
+
+```bash
+python -m multimodal_science.chrompeakformer.run_detector_inference_cli \
+  --source-root "<authorized-detector-source>/model" \
+  --checkpoint "<external-run-root>/chrompeakformer-seed17/checkpoint.pth" \
+  --checkpoint-sha256 "<checkpoint-sha256>" \
+  --training-report "<external-run-root>/chrompeakformer-seed17/detector_training_report.json" \
+  --training-report-sha256 "<training-report-sha256>" \
+  --detector-dataset-root "<external-run-root>/detector-dataset/coco" \
+  --detector-dataset-report "<external-run-root>/detector-dataset/detector_dataset_report.json" \
+  --detector-dataset-report-sha256 "<dataset-report-sha256>" \
+  --output-dir "<external-run-root>/chrompeakformer-seed17-predictions"
+```
+
+Finally, the unified evaluator reports official COCO AP@[.50:.95], AP50, AP75 and recall together
+with image-level peak classification and best-box IoU. The fixed 0.5 threshold is always retained;
+the validation-selected threshold is explicitly marked as development-only:
+
+```bash
+python -m multimodal_science.chrompeakformer.evaluate_detector_cli \
+  --validation-coco "<external-run-root>/detector-dataset/coco/val/val_coco.json" \
+  --predictions "<external-run-root>/chrompeakformer-seed17-predictions/coco_predictions.json" \
+  --inference-report "<external-run-root>/chrompeakformer-seed17-predictions/detector_inference_report.json" \
+  --inference-report-sha256 "<inference-report-sha256>" \
+  --detector-dataset-report "<external-run-root>/detector-dataset/detector_dataset_report.json" \
+  --detector-dataset-report-sha256 "<dataset-report-sha256>" \
+  --output-dir "<external-run-root>/chrompeakformer-seed17-evaluation"
+```
+
 ## Sequence-baseline evaluation contract
 
 The sequence baseline loads only the materialized Dataset above. Its loader verifies the report
@@ -281,6 +353,8 @@ CUDA_VISIBLE_DEVICES=0 python -m multimodal_science.baselines.train_sequence_cli
 
 The `sequence` and `sequence_metadata` modalities share the same residual 1D encoder, detection
 head, and positive-only boundary head; only the latter receives the seven audited scalar features.
+Equal-bin max pooling uses a non-overlapping deterministic implementation instead of PyTorch's
+adaptive CUDA backward kernel, so strict deterministic training remains enabled on supported GPUs.
 The runner selects its checkpoint by validation loss, reports both fixed-0.5 and
 validation-selected detection metrics, freezes the selected threshold, and saves a source-grouped
 bootstrap report. It refuses to overwrite an existing run directory and has no internal-test CLI

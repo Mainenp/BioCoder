@@ -228,10 +228,12 @@ Supervision must come from human labels, deterministic rules, or verified tool o
 
 Run the following sequence:
 
-1. Zero-shot and few-shot baselines.
-2. Qwen3-VL-8B domain LoRA.
-3. LoRA with a 1D chromatogram encoder and sensor projector.
-4. Optional small-learning-rate visual adaptation only if validation evidence supports it.
+1. Reproduce the ChromPeakFormer specialist detector on the leakage-safe train/validation split.
+2. Run sequence-only and sequence-plus-metadata ablations on the same split.
+3. Retain the completed zero-shot baseline and run Qwen3-VL domain LoRA.
+4. Add the 1D chromatogram encoder and sensor projector.
+5. Fuse or distil specialist-detector evidence only after the unimodal comparisons are valid.
+6. Attempt small-learning-rate visual adaptation only if validation evidence supports it.
 
 The primary training target is BF16 LoRA on three 48 GB GPUs. QLoRA is a fallback, not the default target.
 

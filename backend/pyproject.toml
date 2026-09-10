@@ -33,6 +33,7 @@ training = [
   "accelerate>=1,<2",
   "datasets>=3,<5",
   "peft>=0.14,<1",
+  "pycocotools>=2.0.7,<3",
   "transformers>=4.48,<6",
   "trl>=0.15,<1",
 ]
