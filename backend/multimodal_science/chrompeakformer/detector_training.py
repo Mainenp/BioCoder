@@ -14,6 +14,27 @@ from multimodal_science.chrompeakformer.detector_inference import _source_tree_s
 from multimodal_science.data.manifest import sha256_file
 
 
+_DISTRIBUTED_LAUNCHER_ENVIRONMENT_VARIABLES = frozenset(
+    {
+        "GROUP_RANK",
+        "LOCAL_RANK",
+        "LOCAL_WORLD_SIZE",
+        "MASTER_ADDR",
+        "MASTER_PORT",
+        "PMI_RANK",
+        "PMI_SIZE",
+        "RANK",
+        "ROLE_RANK",
+        "ROLE_WORLD_SIZE",
+        "SLURM_LOCALID",
+        "SLURM_NTASKS",
+        "SLURM_NTASKS_PER_NODE",
+        "SLURM_PROCID",
+        "WORLD_SIZE",
+    }
+)
+
+
 @dataclass(frozen=True)
 class DetectorTrainingResult:
     output_dir: Path
@@ -80,6 +101,21 @@ def _training_mean_box_width(train_coco_path: Path) -> float:
         _require(0.0 < width <= width_by_image[image_id], "Training bbox width is invalid")
         normalized_widths.append(width / width_by_image[image_id])
     return sum(normalized_widths) / len(normalized_widths)
+
+
+def _single_process_environment(source_root: Path) -> tuple[dict[str, str], list[str]]:
+    """Build an environment that cannot be mistaken for a distributed launcher."""
+
+    environment = os.environ.copy()
+    removed_variables = sorted(
+        key for key in _DISTRIBUTED_LAUNCHER_ENVIRONMENT_VARIABLES if key in environment
+    )
+    for key in removed_variables:
+        environment.pop(key)
+    environment["PYTHONPATH"] = os.pathsep.join(
+        value for value in (str(source_root), environment.get("PYTHONPATH", "")) if value
+    )
+    return environment, removed_variables
 
 
 def run_detector_training(
@@ -183,6 +219,7 @@ def run_detector_training(
     effective_path.write_text(
         json.dumps(effective_config, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
     )
+    environment, removed_launcher_variables = _single_process_environment(source_root)
     contract_path = output_dir / "training_contract.json"
     contract_path.write_text(
         json.dumps(
@@ -195,6 +232,8 @@ def run_detector_training(
                 "detector_dataset_report_sha256": expected_dataset_report_sha256,
                 "resume_checkpoint_sha256": resume_sha256,
                 "train_only_mean_box_width": train_mean_box_width,
+                "execution_mode": "single_process",
+                "distributed_launcher_environment_removed": removed_launcher_variables,
                 "smoke_test": smoke_test,
             },
             ensure_ascii=False,
@@ -202,10 +241,6 @@ def run_detector_training(
         )
         + "\n",
         encoding="utf-8",
-    )
-    environment = os.environ.copy()
-    environment["PYTHONPATH"] = os.pathsep.join(
-        value for value in (str(source_root), environment.get("PYTHONPATH", "")) if value
     )
     command = [sys.executable, "train.py", "--config", str(effective_path)]
     try:
@@ -253,6 +288,7 @@ def run_detector_training(
                 "best_observed_validation_coco": _coco_summary(best_record),
                 "final_checkpoint_validation_coco": _coco_summary(final_record),
                 "checkpoint_selection": "final_epoch",
+                "execution_mode": "single_process",
                 "run_scope": "smoke" if smoke_test else "full_development",
                 "smoke_test": smoke_test,
                 "development_comparison_eligible": not smoke_test,

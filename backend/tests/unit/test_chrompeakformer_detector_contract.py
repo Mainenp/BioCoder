@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -277,6 +278,7 @@ class ChromPeakDetectorContractTests(unittest.TestCase):
             """\
 import argparse
 import json
+import os
 from pathlib import Path
 
 command = argparse.ArgumentParser()
@@ -284,6 +286,25 @@ command.add_argument("--config", required=True)
 arguments = command.parse_args()
 config = json.loads(Path(arguments.config).read_text(encoding="utf-8"))
 destination = Path(config["output_dir"])
+(destination / "launcher_environment.json").write_text(
+    json.dumps(
+        {
+            key: os.environ[key]
+            for key in (
+                "LOCAL_RANK",
+                "MASTER_ADDR",
+                "MASTER_PORT",
+                "RANK",
+                "SLURM_LOCALID",
+                "SLURM_NTASKS",
+                "SLURM_PROCID",
+                "WORLD_SIZE",
+            )
+            if key in os.environ
+        }
+    ),
+    encoding="utf-8",
+)
 (destination / "checkpoint.pth").write_bytes(b"checkpoint")
 record = {"epoch": 0, "test_coco_eval_bbox": [1.0] * 12}
 (destination / "log.txt").write_text(json.dumps(record) + "\\n", encoding="utf-8")
@@ -297,22 +318,56 @@ record = {"epoch": 0, "test_coco_eval_bbox": [1.0] * 12}
         )
         training_output = self.root / "training"
 
-        result = run_detector_training(
-            source_root=source,
-            source_config_path=source_config,
-            detector_dataset_root=output / "coco",
-            detector_dataset_report_path=dataset_report,
-            expected_dataset_report_sha256=sha256_file(dataset_report),
-            output_dir=training_output,
-            device="cpu",
-            epochs=1,
-            smoke_test=True,
-        )
+        with patch.dict(
+            os.environ,
+            {
+                "LOCAL_RANK": "0",
+                "MASTER_ADDR": "scheduler.example",
+                "MASTER_PORT": "29500",
+                "RANK": "0",
+                "SLURM_LOCALID": "0",
+                "SLURM_NTASKS": "1",
+                "SLURM_PROCID": "0",
+                "WORLD_SIZE": "1",
+            },
+        ):
+            result = run_detector_training(
+                source_root=source,
+                source_config_path=source_config,
+                detector_dataset_root=output / "coco",
+                detector_dataset_report_path=dataset_report,
+                expected_dataset_report_sha256=sha256_file(dataset_report),
+                output_dir=training_output,
+                device="cpu",
+                epochs=1,
+                smoke_test=True,
+            )
         report = json.loads(result.report_path.read_text(encoding="utf-8"))
+        contract = json.loads(
+            (training_output / "training_contract.json").read_text(encoding="utf-8")
+        )
+        launcher_environment = json.loads(
+            (training_output / "launcher_environment.json").read_text(encoding="utf-8")
+        )
 
         self.assertTrue(report["smoke_test"])
         self.assertEqual(report["run_scope"], "smoke")
+        self.assertEqual(report["execution_mode"], "single_process")
         self.assertFalse(report["development_comparison_eligible"])
+        self.assertEqual(launcher_environment, {})
+        self.assertEqual(
+            contract["distributed_launcher_environment_removed"],
+            [
+                "LOCAL_RANK",
+                "MASTER_ADDR",
+                "MASTER_PORT",
+                "RANK",
+                "SLURM_LOCALID",
+                "SLURM_NTASKS",
+                "SLURM_PROCID",
+                "WORLD_SIZE",
+            ],
+        )
         self.assertTrue((training_output / "artifact_manifest.sha256").is_file())
 
 
