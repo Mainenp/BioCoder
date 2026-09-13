@@ -86,6 +86,23 @@ class SequenceBaselineContractTests(unittest.TestCase):
         torch.testing.assert_close(actual, expected)
         self.assertNotIsInstance(model.maximum_pool, torch.nn.AdaptiveMaxPool1d)
 
+    def test_average_pool_matches_adaptive_pool_without_nondeterministic_kernel(
+        self,
+    ) -> None:
+        try:
+            import torch
+        except ImportError:
+            self.skipTest("torch is not installed")
+
+        model = build_sequence_peak_net(SequenceModelSpec())
+        encoded = torch.arange(40, dtype=torch.float32).reshape(1, 2, 20)
+        expected = torch.nn.functional.adaptive_avg_pool1d(encoded, 10)
+
+        actual = model.average_pool(encoded)
+
+        torch.testing.assert_close(actual, expected)
+        self.assertNotIsInstance(model.average_pool, torch.nn.AdaptiveAvgPool1d)
+
     def test_cli_defaults_to_cpu_and_exposes_no_internal_test_surface(self) -> None:
         command = parser()
         arguments = command.parse_args(["--dataset-root", "dataset", "--output-dir", "run"])

@@ -30,7 +30,7 @@ class SequenceModelSpec:
         if encoded_points % self.position_bins:
             raise ValueError(
                 "Encoded sequence length must divide evenly into position bins for "
-                "deterministic max pooling: "
+                "deterministic pooling: "
                 f"encoded_points={encoded_points}, bins={self.position_bins}"
             )
         if not 0.0 <= self.dropout < 1.0:
@@ -56,8 +56,8 @@ def build_sequence_peak_net(spec: SequenceModelSpec) -> Any:
         """Match adaptive max pooling when bins divide the encoded sequence.
 
         ``AdaptiveMaxPool1d`` dispatches to a CUDA backward kernel that PyTorch
-        rejects when deterministic algorithms are enabled.  The detector always
-        The validated model specification guarantees equal, non-overlapping
+        rejects when deterministic algorithms are enabled. The validated model
+        specification guarantees equal, non-overlapping
         bins, so a reshape followed by ``max`` is mathematically equivalent
         while retaining deterministic CUDA backward support.
         """
@@ -77,6 +77,25 @@ def build_sequence_peak_net(spec: SequenceModelSpec) -> Any:
             bin_width = points // self.output_bins
             shaped = inputs.reshape(*inputs.shape[:-1], self.output_bins, bin_width)
             return shaped.max(dim=-1).values
+
+    class NonOverlappingAveragePool1d(nn.Module):
+        """Match adaptive average pooling with deterministic CUDA backward."""
+
+        def __init__(self, output_bins: int) -> None:
+            super().__init__()
+            self.output_bins = output_bins
+
+        def forward(self, inputs: Any) -> Any:
+            points = int(inputs.shape[-1])
+            if points % self.output_bins:
+                raise ValueError(
+                    "Encoded sequence length must be divisible by position bins "
+                    "for deterministic average pooling: "
+                    f"points={points}, bins={self.output_bins}"
+                )
+            bin_width = points // self.output_bins
+            shaped = inputs.reshape(*inputs.shape[:-1], self.output_bins, bin_width)
+            return shaped.mean(dim=-1)
 
     class ResidualBlock(nn.Module):
         def __init__(self, input_channels: int, output_channels: int, stride: int) -> None:
@@ -133,7 +152,7 @@ def build_sequence_peak_net(spec: SequenceModelSpec) -> Any:
                 ResidualBlock(channels * 2, channels * 3, stride=2),
                 ResidualBlock(channels * 3, channels * 4, stride=2),
             )
-            self.average_pool = nn.AdaptiveAvgPool1d(spec.position_bins)
+            self.average_pool = NonOverlappingAveragePool1d(spec.position_bins)
             self.maximum_pool = NonOverlappingMaxPool1d(spec.position_bins)
             encoded_features = channels * 8 * spec.position_bins
             self.metadata_encoder = None
