@@ -380,6 +380,28 @@ The command refuses to overwrite an existing verification report. Older runs who
 records predate the required `roi_width_minutes` evidence must be rerun; physical-time metrics
 cannot be reconstructed safely without it.
 
+After the formal detector and both sequence modalities have independently passed their evidence
+contracts, create a hash-bound development comparison. The builder verifies that all runs use the
+same asset index, train/validation counts, and source-group boundary. It reports fixed-0.5 and
+validation-selected classification results separately and refuses smoke, internal-test, or
+unverified sequence reports:
+
+```bash
+python -m multimodal_science.baselines.compare_runs_cli \
+  --detector-evaluation "<detector-run>/evaluation/detector_evaluation_report.json" \
+  --detector-dataset-report "<detector-run>/detector-dataset/detector_dataset_report.json" \
+  --sequence-report "<sequence-run>/scientific_report.json" \
+  --sequence-verification "<sequence-run>/recovery_verification_report.json" \
+  --sequence-metadata-report "<sequence-metadata-run>/scientific_report.json" \
+  --sequence-metadata-verification "<sequence-metadata-run>/verification_report.json" \
+  --output-dir "<external-run-root>/development-ablation"
+```
+
+The generated Markdown table uses the common fixed threshold for the primary classification
+comparison. COCO AP remains detector-only, and the report explicitly preserves the distinction
+between detector best-box IoU and sequence interval IoU. It is development evidence, not a sealed
+test result.
+
 ## Qwen3-VL instruction and evaluation data
 
 The instruction builder consumes only the hash-verified unified Dataset. It verifies every

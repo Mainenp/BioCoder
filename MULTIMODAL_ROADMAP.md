@@ -5,10 +5,10 @@ ROI/XIC/COCO build, and unified 160-point Dataset materialization are verified. 
 training runner, independent run validator, and Qwen3-VL instruction/evaluation builder are
 implemented. The bilingual instruction Dataset has been materialized externally and its oracle
 evaluation contract verified. A prompt-only inference bundle, resumable Transformers runner, and
-generation-provenance gate are implemented; real model runs, internal-test extraction, and
-benchmark results are not yet complete. A full Qwen3-VL-4B bilingual zero-shot baseline and its
-failure-mode audit are now verified externally; domain training and all sealed-test claims remain
-incomplete.
+generation-provenance gate are implemented. A formal ChromPeakFormer detector baseline, both
+SequencePeakNet ablations, and a full Qwen3-VL-4B bilingual zero-shot baseline with failure-mode
+audit are verified externally. Qwen3-VL domain training, internal-test extraction, and all sealed
+benchmark claims remain incomplete.
 
 ## Verified Phase A snapshot
 
@@ -64,6 +64,40 @@ both train and validation, zero validation-only components, and a train-versus-v
 rate gap of `0.008783`. Its deterministic report SHA-256 is
 `5027330265672012b4bc6302187c772014d87bb22f15ba29a890c67ef1e113b4`. This report is bound to the
 asset-index hash above.
+
+## Verified development-baseline snapshot
+
+All three formal baselines use the same leakage-safe 14,355-train/1,815-validation asset split,
+with 87 train and 11 validation source mzML groups. They are eligible for validation-set
+development comparisons only: the sealed internal-test split remains unopened.
+
+At the fixed 0.5 classification threshold, the ChromPeakFormer image detector obtained `0.9030`
+accuracy, `0.8209` balanced accuracy, `0.8479` Macro-F1, `0.7054` MCC, `0.8742` AUROC, and a
+`0.3276` false-positive rate. Its official COCO metrics were `0.5266` AP@[.50:.95], `0.8418` AP50,
+and `0.5854` AP75; fixed-threshold mean best-box IoU was `0.7873`. The detector evaluation report
+SHA-256 is `2c28bc5a0793e6cd2a209b8bf09d5ac022c3721534af7ebcdd3e5fa45bb50932`.
+
+The sequence-only SequencePeakNet selected epoch 17 by validation loss and stopped after epoch 25.
+At the fixed 0.5 threshold it obtained `0.9691` accuracy, `0.9714` balanced accuracy, `0.9569`
+Macro-F1, `0.9153` MCC, `0.9956` AUROC, and a `0.0246` false-positive rate. Its positive-only mean
+interval IoU was `0.7846`, with `1.9940` seconds mean boundary error. The report and independent
+verification SHA-256 values are respectively
+`1ef5e9694bb6767a29aa04ba4d48b715ae3f7d53d67d2b8d5f69b58c5b1d05b5` and
+`140731437b7542ef1ad777a50f1df95009922e1596a1a0df42788f75ae818d96`.
+
+The otherwise matched sequence-plus-metadata run selected epoch 23 and stopped after epoch 31.
+At the fixed threshold it obtained `0.9730` accuracy, `0.9686` balanced accuracy, `0.9617`
+Macro-F1, `0.9237` MCC, `0.9964` AUROC, and a `0.0394` false-positive rate. Mean interval IoU was
+`0.7880`, with `1.9828` seconds mean boundary error. Its report and verification SHA-256 values are
+respectively `92158e3118fe327524834b40d765c98df978784c63cc65402ef6223d5c40ebec` and
+`eba881fe07240f6b4bb8910e95adde5bc30bb3bef7d158089d2d9fbaf14a012f`.
+
+These single-seed results show that raw XIC sequences are the strongest current signal for peak
+presence, while the seven audited metadata features provide only a small net change: fixed-threshold
+Macro-F1 and mean interval IoU improve slightly, but false-positive rate also rises. Replicated
+seeds are required before claiming that the metadata improvement is stable. Detector best-box IoU
+and sequence interval IoU are not interchangeable localization metrics, and COCO AP applies only
+to the image detector.
 
 ## Verified Qwen3-VL zero-shot snapshot
 
