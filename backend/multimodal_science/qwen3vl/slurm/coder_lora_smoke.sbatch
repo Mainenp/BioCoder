@@ -41,19 +41,24 @@ seed="${BIOCODER_SEED:-17}"
 max_records="${BIOCODER_MAX_RECORDS:-128}"
 max_steps="${BIOCODER_MAX_STEPS:-2}"
 max_gpu_used_mib="${BIOCODER_MAX_GPU_USED_MIB:-1024}"
+max_gpu_utilization="${BIOCODER_MAX_GPU_UTILIZATION:-10}"
 inference_records="${BIOCODER_INFERENCE_RECORDS:-16}"
 job_id="${SLURM_JOB_ID:-manual}"
 code_short="${BIOCODER_CODE_REVISION:0:7}"
 
 for numeric_value in \
-  "$gpu_index" "$seed" "$max_records" "$max_steps" \
-  "$max_gpu_used_mib" "$inference_records"
+  "$seed" "$max_records" "$max_steps" "$max_gpu_used_mib" \
+  "$max_gpu_utilization" "$inference_records"
 do
   [[ "$numeric_value" =~ ^[0-9]+$ ]] || {
     echo "Expected a nonnegative integer, got: $numeric_value" >&2
     exit 2
   }
 done
+[[ "$gpu_index" == "auto" || "$gpu_index" =~ ^[0-9]+$ ]] || {
+  echo "BIOCODER_GPU_INDEX must be a physical index or auto" >&2
+  exit 2
+}
 [[ "$BIOCODER_MODEL_ARTIFACT_SHA256" =~ ^[0-9a-f]{64}$ ]]
 [[ "$BIOCODER_INSTRUCTION_REPORT_SHA256" =~ ^[0-9a-f]{64}$ ]]
 [[ "$BIOCODER_INFERENCE_BUNDLE_REPORT_SHA256" =~ ^[0-9a-f]{64}$ ]]
@@ -76,34 +81,65 @@ echo "JOB_ID=$job_id"
 echo "JOB_NAME=${SLURM_JOB_NAME:-manual}"
 echo "NODE=$(hostname -s)"
 echo "CODE_REVISION=$actual_revision"
-echo "PHYSICAL_GPU=$gpu_index"
+echo "REQUESTED_GPU=$gpu_index"
 echo "MAX_RECORDS=$max_records"
 echo "MAX_STEPS=$max_steps"
 
-lock_path="/tmp/biocoder-${USER}-gpu-${gpu_index}.lock"
-exec 9>"$lock_path"
-flock -n 9 || {
-  echo "BioCoder GPU lock is already held: $lock_path" >&2
-  exit 4
+gpu_passes_guard() {
+  local candidate="$1"
+  local sample gpu_state used_mib remainder utilization
+  for sample in 1 2 3
+  do
+    gpu_state="$(
+      nvidia-smi -i "$candidate" \
+        --query-gpu=memory.used,memory.free,utilization.gpu,name \
+        --format=csv,noheader,nounits
+    )" || return 1
+    echo "candidate=$candidate sample=$sample $gpu_state" >&2
+    used_mib="${gpu_state%%,*}"
+    remainder="${gpu_state#*,}"
+    remainder="${remainder#*,}"
+    utilization="${remainder%%,*}"
+    used_mib="${used_mib// /}"
+    utilization="${utilization// /}"
+    [[ "$used_mib" =~ ^[0-9]+$ && "$utilization" =~ ^[0-9]+$ ]] || return 1
+    (( used_mib <= max_gpu_used_mib )) || return 1
+    (( utilization <= max_gpu_utilization )) || return 1
+    sleep 2
+  done
 }
 
 echo "=== GPU STARTUP GUARD ==="
-for sample in 1 2 3
-do
-  gpu_state="$(
-    nvidia-smi -i "$gpu_index" \
-      --query-gpu=memory.used,memory.free,utilization.gpu,name \
-      --format=csv,noheader,nounits
-  )"
-  echo "sample=$sample $gpu_state"
-  used_mib="${gpu_state%%,*}"
-  used_mib="${used_mib// /}"
-  (( used_mib <= max_gpu_used_mib )) || {
-    echo "GPU $gpu_index is already using ${used_mib} MiB" >&2
+if [[ "$gpu_index" == "auto" ]]; then
+  gpu_index=""
+  gpu_count="$(nvidia-smi --query-gpu=index --format=csv,noheader,nounits | wc -l)"
+  for (( candidate=0; candidate<gpu_count; candidate++ ))
+  do
+    lock_path="/tmp/biocoder-${USER}-gpu-${candidate}.lock"
+    exec 9>"$lock_path"
+    if flock -n 9 && gpu_passes_guard "$candidate"
+    then
+      gpu_index="$candidate"
+      break
+    fi
+  done
+  [[ -n "$gpu_index" ]] || {
+    echo "No unlocked GPU passed the memory/utilization guard" >&2
     exit 5
   }
-  sleep 2
-done
+else
+  lock_path="/tmp/biocoder-${USER}-gpu-${gpu_index}.lock"
+  exec 9>"$lock_path"
+  flock -n 9 || {
+    echo "BioCoder GPU lock is already held: $lock_path" >&2
+    exit 4
+  }
+  gpu_passes_guard "$gpu_index" || {
+    echo "GPU $gpu_index failed the memory/utilization guard" >&2
+    exit 5
+  }
+fi
+echo "SELECTED_PHYSICAL_GPU=$gpu_index"
 
 export CUDA_VISIBLE_DEVICES="$gpu_index"
 export PYTHONPATH="$repo_root/backend"

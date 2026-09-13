@@ -132,9 +132,10 @@ Status: planned. A requirement is complete only when its linked checks pass with
   base-model hash, and train-only/frozen-base contracts before PEFT model loading.
 - Adapter CLI identity arguments are all-or-none; smoke-trained adapters remain development-only
   contract evidence even when inference covers every validation prompt.
-- The scheduled `coder` LoRA smoke refuses an occupied physical GPU, performs two BF16 optimizer
-  steps, reloads the persisted adapter through the hash-bound inference runner, and leaves both
-  training and bounded generation explicitly ineligible for development comparison.
+- The scheduled `coder` LoRA smoke locks and selects a physical GPU only when both memory and
+  utilization samples pass, performs two BF16 optimizer steps, reloads the persisted adapter
+  through the hash-bound inference runner, and leaves both training and bounded generation
+  explicitly ineligible for development comparison.
   Training completion alone is not a development metric until answer-separated inference and
   evaluation pass on every validation instruction.
 - The 1D encoder output is projected into the expected multimodal representation shape.

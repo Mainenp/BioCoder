@@ -511,8 +511,8 @@ same answer-separated development evaluation used by the zero-shot baseline.
 
 For the first GPU contract test, use the checked-in `qwen3vl/slurm/coder_lora_smoke.sbatch`
 instead of pasting the training command into an interactive shell. The script keeps the required
-job name `coder`, requires an explicit physical GPU index, refuses a GPU already above the declared
-memory guard, verifies the repository revision, builds a 128-row train-only bundle, performs two
+job name `coder`, selects an unlocked physical GPU at job start, refuses GPUs above either the
+declared memory or utilization guard, verifies the repository revision, builds a 128-row train-only bundle, performs two
 optimizer updates, reloads the saved adapter for bounded inference, and persists verified outputs.
 Partition, node, log paths, and all site-specific paths stay submission-time settings:
 
@@ -526,7 +526,7 @@ export BIOCODER_MODEL_REVISION="<immutable-revision>"
 export BIOCODER_INSTRUCTION_REPORT_SHA256="<instruction-report-digest>"
 export BIOCODER_INFERENCE_BUNDLE_REPORT_SHA256="<inference-bundle-report-digest>"
 export BIOCODER_CODE_REVISION="$(git rev-parse HEAD)"
-export BIOCODER_GPU_INDEX="<verified-idle-physical-index>"
+export BIOCODER_GPU_INDEX="auto"
 
 job_id="$(sbatch --parsable \
   --partition="<gpu-partition>" \
