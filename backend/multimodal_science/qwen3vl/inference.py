@@ -19,6 +19,7 @@ from multimodal_science.qwen3vl.inference_bundle import (
     BUNDLE_PROMPT_SCHEMA,
     BUNDLE_SCHEMA,
 )
+from multimodal_science.qwen3vl.lora_training import LORA_TRAINING_REPORT_SCHEMA
 
 GENERATION_CONFIG_SCHEMA = "chrompeak-qwen3vl-generation-config-v1"
 GENERATION_RECORD_SCHEMA = "chrompeak-qwen3vl-generation-record-v1"
@@ -53,6 +54,13 @@ class PromptRequest:
 
 
 @dataclass(frozen=True)
+class AdapterSpec:
+    root: Path
+    training_report_sha256: str
+    manifest_sha256: str
+
+
+@dataclass(frozen=True)
 class QwenInferenceResult:
     output_dir: Path
     report_path: Path
@@ -74,7 +82,10 @@ class BatchGenerator(Protocol):
     ) -> list[str]: ...
 
 
-GeneratorFactory = Callable[[str, str, GenerationSettings], BatchGenerator]
+GeneratorFactory = Callable[
+    [str, str, GenerationSettings, Path | None],
+    BatchGenerator,
+]
 
 
 def _require(condition: bool, message: str) -> None:
@@ -209,12 +220,158 @@ def _version_tuple(value: str) -> tuple[int, int, int]:
     return tuple(int(part) for part in match.groups())
 
 
+def _verify_adapter(
+    specification: AdapterSpec,
+    *,
+    model_name_or_path: str,
+    model_revision: str,
+    model_artifact_sha256: str | None,
+) -> tuple[Path, dict[str, Any]]:
+    root = specification.root.resolve()
+    _require(root.is_dir(), f"LoRA adapter root not found: {root}")
+    _require(
+        bool(_HEX_64.fullmatch(specification.training_report_sha256)),
+        "LoRA training report SHA-256 must be lowercase hexadecimal",
+    )
+    _require(
+        bool(_HEX_64.fullmatch(specification.manifest_sha256)),
+        "LoRA manifest SHA-256 must be lowercase hexadecimal",
+    )
+    _require(
+        model_artifact_sha256 is not None,
+        "LoRA inference requires the immutable base-model artifact SHA-256",
+    )
+
+    manifest_path = root / "artifact_manifest.sha256"
+    _require(manifest_path.is_file(), f"Missing LoRA artifact manifest: {manifest_path}")
+    _require(
+        sha256_file(manifest_path) == specification.manifest_sha256,
+        "LoRA artifact manifest hash mismatch",
+    )
+    manifest: dict[str, str] = {}
+    for line_number, raw_line in enumerate(
+        manifest_path.read_text(encoding="utf-8").splitlines(),
+        start=1,
+    ):
+        parts = raw_line.split("  ", maxsplit=1)
+        _require(len(parts) == 2, f"Malformed LoRA manifest line: {line_number}")
+        expected_hash, relative = parts
+        _require(
+            bool(_HEX_64.fullmatch(expected_hash)),
+            f"Invalid LoRA artifact hash at line {line_number}",
+        )
+        _require("\\" not in relative, f"Non-portable LoRA artifact path: {relative}")
+        relative_path = PurePosixPath(relative)
+        _require(
+            not relative_path.is_absolute()
+            and all(part not in {"", ".", ".."} for part in relative_path.parts),
+            f"Unsafe LoRA artifact path: {relative}",
+        )
+        _require(relative not in manifest, f"Duplicate LoRA artifact: {relative}")
+        artifact_path = (root / Path(*relative_path.parts)).resolve()
+        try:
+            artifact_path.relative_to(root)
+        except ValueError as error:
+            raise ValueError(f"LoRA artifact escapes root: {relative}") from error
+        _require(artifact_path.is_file(), f"Missing LoRA artifact: {relative}")
+        _require(
+            sha256_file(artifact_path) == expected_hash,
+            f"LoRA artifact hash mismatch: {relative}",
+        )
+        manifest[relative] = expected_hash
+
+    for required in (
+        "lora_training_report.json",
+        "adapter/adapter_config.json",
+        "adapter/adapter_model.safetensors",
+    ):
+        _require(required in manifest, f"LoRA manifest is missing: {required}")
+    unlisted_adapter_files = sorted(
+        path.relative_to(root).as_posix()
+        for path in (root / "adapter").rglob("*")
+        if path.is_file() and path.relative_to(root).as_posix() not in manifest
+    )
+    _require(
+        not unlisted_adapter_files,
+        f"LoRA adapter contains unlisted artifacts: {unlisted_adapter_files}",
+    )
+    report_path = root / "lora_training_report.json"
+    _require(
+        sha256_file(report_path) == specification.training_report_sha256,
+        "LoRA training report hash mismatch",
+    )
+    report = _read_json(report_path, "LoRA training report")
+    _require(
+        report.get("schema_version") == LORA_TRAINING_REPORT_SCHEMA,
+        "Unsupported LoRA training report schema",
+    )
+    _require(
+        isinstance(report.get("code_revision"), str)
+        and bool(_HEX_40_TO_64.fullmatch(report["code_revision"])),
+        "LoRA code revision is invalid",
+    )
+    contracts = _object(report.get("contracts"), "LoRA training contracts")
+    for name, expected in (
+        ("base_weights_frozen", True),
+        ("vision_tower_frozen", True),
+        ("vision_merger_frozen", True),
+        ("assistant_tokens_only_supervision", True),
+        ("train_split_only", True),
+        ("validation_prompts_opened", False),
+        ("validation_answers_opened", False),
+        ("internal_test_accessed", False),
+    ):
+        _require(contracts.get(name) is expected, f"LoRA contract failed: {name}")
+    _require(report.get("internal_test_accessed") is False, "LoRA training accessed test data")
+    model = _object(report.get("model"), "LoRA base model")
+    _require(model.get("revision") == model_revision, "LoRA base revision mismatch")
+    _require(
+        model.get("artifact_sha256") == model_artifact_sha256,
+        "LoRA base-model artifact hash mismatch",
+    )
+    _require(
+        model.get("adapter_target_modules")
+        == ["q_proj", "k_proj", "v_proj", "o_proj"],
+        "LoRA adapter target modules are unsupported",
+    )
+    training = _object(report.get("training"), "LoRA training")
+    training_records = training.get("training_records")
+    _require(
+        isinstance(training_records, int)
+        and not isinstance(training_records, bool)
+        and training_records >= 1,
+        "LoRA training-record count is invalid",
+    )
+    development_training_complete = report.get("development_training_complete")
+    _require(
+        isinstance(development_training_complete, bool),
+        "LoRA training-completion flag is invalid",
+    )
+    _require(
+        report.get("development_comparison_eligible") is False,
+        "Training must not self-qualify as evaluated development evidence",
+    )
+    _require(
+        report.get("final_benchmark_eligible") is False,
+        "LoRA training cannot be a final benchmark",
+    )
+    return root / "adapter", {
+        "training_report_sha256": specification.training_report_sha256,
+        "manifest_sha256": specification.manifest_sha256,
+        "code_revision": report.get("code_revision"),
+        "trained_base_name_or_path": model.get("name_or_path"),
+        "development_training_complete": development_training_complete,
+        "training_records": training_records,
+    }
+
+
 class _TransformersGenerator:
     def __init__(
         self,
         model_name_or_path: str,
         model_revision: str,
         settings: GenerationSettings,
+        adapter_dir: Path | None,
     ) -> None:
         try:
             transformers_version = version("transformers")
@@ -250,6 +407,20 @@ class _TransformersGenerator:
             model_name_or_path,
             **model_kwargs,
         )
+        peft_version: str | None = None
+        adapter_class: str | None = None
+        if adapter_dir is not None:
+            try:
+                from peft import PeftModel
+            except ImportError as error:
+                raise RuntimeError("LoRA inference requires peft") from error
+            self._model = PeftModel.from_pretrained(
+                self._model,
+                adapter_dir,
+                is_trainable=False,
+            )
+            peft_version = version("peft")
+            adapter_class = type(self._model).__name__
         self._model.eval()
         self._processor = AutoProcessor.from_pretrained(
             model_name_or_path,
@@ -270,6 +441,9 @@ class _TransformersGenerator:
             "resolved_model_revision": resolved_revision,
             "cuda_available": bool(torch.cuda.is_available()),
             "cuda_device_count": int(torch.cuda.device_count()),
+            "adapter_loaded": adapter_dir is not None,
+            "adapter_class": adapter_class,
+            "peft_version": peft_version,
         }
 
     @property
@@ -335,8 +509,14 @@ def _transformers_generator_factory(
     model_name_or_path: str,
     model_revision: str,
     settings: GenerationSettings,
+    adapter_dir: Path | None,
 ) -> BatchGenerator:
-    return _TransformersGenerator(model_name_or_path, model_revision, settings)
+    return _TransformersGenerator(
+        model_name_or_path,
+        model_revision,
+        settings,
+        adapter_dir,
+    )
 
 
 def _validate_prompt(record: dict[str, Any]) -> None:
@@ -444,6 +624,7 @@ def run_qwen_inference(
     model_revision: str,
     settings: GenerationSettings = GenerationSettings(),
     model_artifact_sha256: str | None = None,
+    adapter: AdapterSpec | None = None,
     max_records: int | None = None,
     resume: bool = False,
     generator_factory: GeneratorFactory | None = None,
@@ -467,6 +648,15 @@ def run_qwen_inference(
             bool(_HEX_64.fullmatch(model_artifact_sha256)),
             "Model artifact SHA-256 must be lowercase hexadecimal",
         )
+    adapter_dir: Path | None = None
+    adapter_metadata: dict[str, Any] | None = None
+    if adapter is not None:
+        adapter_dir, adapter_metadata = _verify_adapter(
+            adapter,
+            model_name_or_path=model_name_or_path,
+            model_revision=model_revision,
+            model_artifact_sha256=model_artifact_sha256,
+        )
     _validate_settings(settings)
     if max_records is not None:
         _require(max_records >= 1, "max_records must be positive")
@@ -486,6 +676,14 @@ def run_qwen_inference(
             "name_or_path": model_name_or_path,
             "requested_revision": model_revision,
             "artifact_sha256": model_artifact_sha256,
+            "adapter": (
+                {
+                    "root": str(adapter.root.resolve()),
+                    **adapter_metadata,
+                }
+                if adapter_metadata is not None
+                else None
+            ),
         },
         "generation": asdict(settings),
         "scope": {
@@ -523,7 +721,7 @@ def run_qwen_inference(
         runtime_metadata = _read_json(runtime_path, "existing runtime metadata")
     else:
         factory = generator_factory or _transformers_generator_factory
-        generator = factory(model_name_or_path, model_revision, settings)
+        generator = factory(model_name_or_path, model_revision, settings, adapter_dir)
         runtime_metadata = _object(generator.metadata, "generator metadata")
         _require(
             isinstance(runtime_metadata.get("backend"), str)
@@ -618,6 +816,10 @@ def run_qwen_inference(
         complete_prompt_coverage
         and runtime_metadata.get("backend") == "transformers"
         and model_identity_immutable
+        and (
+            adapter_metadata is None
+            or adapter_metadata["development_training_complete"] is True
+        )
     )
     source = _object(bundle_report.get("source"), "bundle source")
     report_path = work_dir / "generation_report.json"
@@ -645,6 +847,7 @@ def run_qwen_inference(
                 "resolved_revision": resolved_revision,
                 "artifact_sha256": model_artifact_sha256,
                 "identity_immutable": model_identity_immutable,
+                "adapter": adapter_metadata,
             },
             "runtime": runtime_metadata,
             "generation": asdict(settings),

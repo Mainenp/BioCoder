@@ -7,6 +7,7 @@ import json
 from pathlib import Path
 
 from multimodal_science.qwen3vl.inference import (
+    AdapterSpec,
     GenerationSettings,
     run_qwen_inference,
 )
@@ -21,6 +22,9 @@ def parser() -> argparse.ArgumentParser:
     command.add_argument("--model-name-or-path", required=True)
     command.add_argument("--model-revision", required=True)
     command.add_argument("--model-artifact-sha256")
+    command.add_argument("--adapter-root", type=Path)
+    command.add_argument("--adapter-training-report-sha256")
+    command.add_argument("--adapter-manifest-sha256")
     command.add_argument("--batch-size", type=int, default=1)
     command.add_argument("--max-new-tokens", type=int, default=64)
     command.add_argument("--do-sample", action="store_true")
@@ -37,6 +41,27 @@ def parser() -> argparse.ArgumentParser:
 
 def main() -> None:
     arguments = parser().parse_args()
+    adapter_values = (
+        arguments.adapter_root,
+        arguments.adapter_training_report_sha256,
+        arguments.adapter_manifest_sha256,
+    )
+    if any(value is not None for value in adapter_values) and not all(
+        value is not None for value in adapter_values
+    ):
+        raise SystemExit(
+            "--adapter-root, --adapter-training-report-sha256, and "
+            "--adapter-manifest-sha256 must be provided together"
+        )
+    adapter = (
+        AdapterSpec(
+            root=arguments.adapter_root,
+            training_report_sha256=arguments.adapter_training_report_sha256,
+            manifest_sha256=arguments.adapter_manifest_sha256,
+        )
+        if arguments.adapter_root is not None
+        else None
+    )
     settings = GenerationSettings(
         batch_size=arguments.batch_size,
         max_new_tokens=arguments.max_new_tokens,
@@ -57,6 +82,7 @@ def main() -> None:
         model_revision=arguments.model_revision,
         settings=settings,
         model_artifact_sha256=arguments.model_artifact_sha256,
+        adapter=adapter,
         max_records=arguments.max_records,
         resume=arguments.resume,
     )

@@ -442,6 +442,101 @@ model inputs with no answers, while `validation_answers.jsonl` is a separately h
 key. `instruction_manifest.jsonl` maps every derived row to the original asset, source mzML group,
 image hash, Dataset hash, task, modalities, and supervision source.
 
+Before LoRA training, publish a train-only bundle. The builder verifies the instruction report,
+official-format train rows, train-manifest prefix, response hashes, and selected image paths. It
+does not open validation prompts or validation answers. A bounded smoke bundle is deterministically
+stratified by task, language, and peak-presence label:
+
+```bash
+python -m multimodal_science.qwen3vl.build_lora_bundle_cli \
+  --instruction-root "<external-dataset-root>/qwen3vl-instructions-v2-bilingual" \
+  --instruction-report-sha256 "<expected-64-hex-digest>" \
+  --assets-root "<external-assets-root>" \
+  --output-dir "<external-dataset-root>/qwen3vl-lora-smoke-bundle" \
+  --max-records 128 \
+  --seed 17
+```
+
+The LoRA runner requires exactly one visible CUDA device and BF16 support. It freezes the base
+language weights, vision tower, and visual merger; adapters target only language-attention
+`q_proj`, `k_proj`, `v_proj`, and `o_proj`. Loss is calculated only on assistant response tokens.
+The default SDPA path avoids making FlashAttention or a local CUDA compiler a prerequisite:
+
+```bash
+CUDA_VISIBLE_DEVICES=0 python -m multimodal_science.qwen3vl.train_lora_cli \
+  --bundle-root "<external-dataset-root>/qwen3vl-lora-smoke-bundle" \
+  --bundle-report-sha256 "<expected-64-hex-digest>" \
+  --assets-root "<external-assets-root>" \
+  --output-dir "<external-run-root>/qwen3vl-lora-smoke" \
+  --model-name-or-path "<Qwen3-VL-4B-checkpoint>" \
+  --model-revision "<immutable-revision>" \
+  --model-artifact-sha256 "<model-artifact-digest>" \
+  --code-revision "<40-hex-git-revision>" \
+  --batch-size 1 \
+  --gradient-accumulation-steps 2 \
+  --max-steps 2 \
+  --save-steps 1
+```
+
+Install the pinned `peft` addition from `qwen3vl/requirements-lora.txt` into the existing Qwen
+environment. Checkpoints contain adapter, optimizer, scheduler, trainer-state, and RNG state so a
+matching `--resume` run can continue safely. A completed adapter is still not metric evidence:
+it must subsequently run through the prompt-only inference bundle and answer-separated evaluator.
+Sample-capped bundles and `--max-steps` runs are explicitly marked as smoke evidence and cannot
+claim completed domain training.
+
+Adapter inference is accepted only when all three adapter identity inputs are supplied. Before
+loading PEFT, the runner verifies the training-report hash, the complete artifact-manifest hash,
+every listed adapter byte, the frozen-base/train-only contracts, and the exact base-model artifact:
+
+```bash
+python -m multimodal_science.qwen3vl.run_inference_cli \
+  --bundle-root "<external-dataset-root>/qwen3vl-inference-bundle-v2" \
+  --bundle-report-sha256 "<expected-64-hex-digest>" \
+  --assets-root "<external-assets-root>" \
+  --output-dir "<external-run-root>/qwen3vl-lora-validation" \
+  --model-name-or-path "<Qwen3-VL-4B-checkpoint>" \
+  --model-revision "<immutable-revision>" \
+  --model-artifact-sha256 "<model-artifact-digest>" \
+  --adapter-root "<external-run-root>/qwen3vl-lora" \
+  --adapter-training-report-sha256 "<training-report-digest>" \
+  --adapter-manifest-sha256 "<artifact-manifest-digest>" \
+  --batch-size 2 \
+  --resume
+```
+
+A smoke-trained adapter may be loaded for a CUDA contract test, but its generation report remains
+development-comparison ineligible. Only an uncapped, completed training report can qualify for the
+same answer-separated development evaluation used by the zero-shot baseline.
+
+For the first GPU contract test, use the checked-in `qwen3vl/slurm/coder_lora_smoke.sbatch`
+instead of pasting the training command into an interactive shell. The script keeps the required
+job name `coder`, requires an explicit physical GPU index, refuses a GPU already above the declared
+memory guard, verifies the repository revision, builds a 128-row train-only bundle, performs two
+optimizer updates, reloads the saved adapter for bounded inference, and persists verified outputs.
+Partition, node, log paths, and all site-specific paths stay submission-time settings:
+
+```bash
+export BIOCODER_RUN_ROOT="<external-run-root>"
+export BIOCODER_REPO_ROOT="$PWD"
+export BIOCODER_PYTHON="<qwen-python>"
+export BIOCODER_MODEL_DIR="<Qwen3-VL-4B-checkpoint>"
+export BIOCODER_MODEL_ARTIFACT_SHA256="<model-artifact-digest>"
+export BIOCODER_MODEL_REVISION="<immutable-revision>"
+export BIOCODER_INSTRUCTION_REPORT_SHA256="<instruction-report-digest>"
+export BIOCODER_INFERENCE_BUNDLE_REPORT_SHA256="<inference-bundle-report-digest>"
+export BIOCODER_CODE_REVISION="$(git rev-parse HEAD)"
+export BIOCODER_GPU_INDEX="<verified-idle-physical-index>"
+
+job_id="$(sbatch --parsable \
+  --partition="<gpu-partition>" \
+  --nodelist="<gpu-node>" \
+  --output="<external-run-root>/qwen3vl/slurm/coder-lora-%j.out" \
+  --error="<external-run-root>/qwen3vl/slurm/coder-lora-%j.err" \
+  backend/multimodal_science/qwen3vl/slurm/coder_lora_smoke.sbatch)"
+echo "LORA_SMOKE_JOB_ID=$job_id"
+```
+
 Multi-task rows are correlated views of the same source assets. The report therefore records
 source assets and derived instruction rows separately; instruction count must never be presented
 as the number of independent chromatograms or images. Image paths remain relative to the external

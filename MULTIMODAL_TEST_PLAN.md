@@ -117,7 +117,26 @@ Status: planned. A requirement is complete only when its linked checks pass with
   and prediction hashes before any metric is calculated.
 - Specialist reports include official COCO AP@[.50:.95], AP50, AP75, recall, image-level peak
   classification, and best-box IoU; validation-selected thresholds are marked development-only.
-- Qwen3-VL-8B LoRA configuration, precision, effective batch size, seed, and gradient accumulation are recorded.
+- The Qwen3-VL LoRA bundle opens only the train prefix and does not open validation prompts,
+  validation answers, or internal-test inputs. It binds the instruction report, train rows,
+  manifest, Dataset, and asset-index hashes before sampling.
+- Sample-capped LoRA bundles use deterministic task/language/label stratification and remain smoke
+  evidence rather than development comparisons.
+- Qwen3-VL-4B LoRA configuration records BF16 precision, effective batch size, seed, gradient
+  accumulation, image resolution, attention implementation, model artifact, trainable parameter
+  fraction, and exact `q/k/v/o` adapter targets.
+- LoRA training masks image and user tokens from the loss and supervises only the assistant answer.
+  The base language weights, vision tower, and visual merger remain frozen.
+- A run saves resumable adapter/optimizer/scheduler/RNG checkpoints and a final safe-tensor adapter.
+- Adapter inference verifies the training report, artifact manifest, every adapter artifact, exact
+  base-model hash, and train-only/frozen-base contracts before PEFT model loading.
+- Adapter CLI identity arguments are all-or-none; smoke-trained adapters remain development-only
+  contract evidence even when inference covers every validation prompt.
+- The scheduled `coder` LoRA smoke refuses an occupied physical GPU, performs two BF16 optimizer
+  steps, reloads the persisted adapter through the hash-bound inference runner, and leaves both
+  training and bounded generation explicitly ineligible for development comparison.
+  Training completion alone is not a development metric until answer-separated inference and
+  evaluation pass on every validation instruction.
 - The 1D encoder output is projected into the expected multimodal representation shape.
 - Every run emits an adapter or checkpoint, configuration snapshot, dataset version, logs, and run metadata.
 - Sequence-only and sequence-plus-metadata runs share the same encoder and heads so that their

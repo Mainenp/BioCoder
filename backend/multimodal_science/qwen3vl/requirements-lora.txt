@@ -1,0 +1,2 @@
+# Install into the existing Qwen3-VL environment; torch/transformers stay externally pinned.
+peft==0.17.1
