@@ -16,6 +16,7 @@ from multimodal_science.qwen3vl.lora_data import (
 )
 from multimodal_science.qwen3vl.lora_training import (
     assistant_supervision_labels,
+    epoch_sample_indices,
     reconcile_history,
 )
 from multimodal_science.qwen3vl.train_lora_cli import parser as training_parser
@@ -174,6 +175,21 @@ def make_adapter(root: Path, *, development_complete: bool = True) -> AdapterSpe
 
 
 class Qwen3VlLoraContractTests(unittest.TestCase):
+    def test_formal_slurm_script_is_guarded_resumable_and_uncapped_by_default(self) -> None:
+        script_path = (
+            Path(__file__).parents[2]
+            / "multimodal_science/qwen3vl/slurm/coder_lora_train.sbatch"
+        )
+        script = script_path.read_text(encoding="utf-8")
+
+        self.assertIn("#SBATCH --job-name=coder", script)
+        self.assertIn('BIOCODER_GPU_INDEX', script)
+        self.assertIn('RESUME_FROM_PERSISTENT_CHECKPOINT=YES', script)
+        self.assertIn('LOCAL_TRAIN_IMAGE_HASHES=OK', script)
+        self.assertIn('development_training_complete', script)
+        self.assertIn('max_records="${BIOCODER_MAX_RECORDS:-}"', script)
+        self.assertIn('max_steps="${BIOCODER_MAX_STEPS:-}"', script)
+
     def test_verifies_complete_adapter_and_base_model_identity(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             specification = make_adapter(Path(directory))
@@ -224,6 +240,13 @@ class Qwen3VlLoraContractTests(unittest.TestCase):
             self.assertFalse(report["internal_test_accessed"])
             self.assertEqual(len((result.training_path).read_text().splitlines()), 4)
             self.assertEqual(len(report["counts"]["by_stratum"]), 4)
+            selections = [
+                json.loads(line)
+                for line in (result.output_dir / "selection_manifest.jsonl")
+                .read_text()
+                .splitlines()
+            ]
+            self.assertTrue(all("image_sha256" in row for row in selections))
 
     def test_rejects_response_that_no_longer_matches_manifest(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -277,6 +300,15 @@ class Qwen3VlLoraContractTests(unittest.TestCase):
             self.assertEqual(reconcile_history(history, 2), 2)
             remaining = [json.loads(line) for line in history.read_text().splitlines()]
             self.assertEqual([record["global_step"] for record in remaining], [1, 2])
+
+    def test_resume_uses_only_unseen_deterministic_epoch_indices(self) -> None:
+        full_order = epoch_sample_indices(11, batch_size=3, seed=17)
+        resumed_order = epoch_sample_indices(11, batch_size=3, seed=17, start_batch=2)
+
+        self.assertEqual(resumed_order, full_order[6:])
+        self.assertEqual(sorted(full_order), list(range(11)))
+        with self.assertRaisesRegex(ValueError, "exceeds the epoch"):
+            epoch_sample_indices(11, batch_size=3, seed=17, start_batch=5)
 
     def test_cli_exposes_bounded_smoke_and_training_controls(self) -> None:
         bundle = bundle_parser().parse_args(

@@ -537,6 +537,51 @@ job_id="$(sbatch --parsable \
 echo "LORA_SMOKE_JOB_ID=$job_id"
 ```
 
+The smoke profile is intentionally too small for throughput extrapolation at `batch_size=1`.
+Before the uncapped run, use the formal runner for a short `batch_size=4` calibration. It stages
+the exact Git revision, a stable node-local model cache, and only the bundle-selected images; each
+staged image is verified against the train-manifest hash. Adapter checkpoints remain on persistent
+storage so another matching job can resume without replaying already-consumed image batches:
+
+```bash
+export BIOCODER_BATCH_SIZE=4
+export BIOCODER_GRADIENT_ACCUMULATION_STEPS=4
+export BIOCODER_SAVE_STEPS=250
+export BIOCODER_LOG_STEPS=10
+export BIOCODER_MAX_RECORDS=128
+export BIOCODER_MAX_STEPS=4
+
+calibration_job_id="$(sbatch --parsable \
+  --partition="<gpu-partition>" \
+  --nodelist="<gpu-node>" \
+  --output="<external-run-root>/qwen3vl/slurm/coder-lora-train-%j.out" \
+  --error="<external-run-root>/qwen3vl/slurm/coder-lora-train-%j.err" \
+  backend/multimodal_science/qwen3vl/slurm/coder_lora_train.sbatch)"
+echo "LORA_CALIBRATION_JOB_ID=$calibration_job_id"
+```
+
+After that calibration passes the memory guard, remove both explicit caps to request the complete
+54,335-row, one-epoch development training run. The default effective batch size is 16. The
+formal job still does not access validation answers, does not evaluate itself, and cannot claim a
+final benchmark:
+
+```bash
+unset BIOCODER_MAX_RECORDS BIOCODER_MAX_STEPS
+
+formal_job_id="$(sbatch --parsable \
+  --partition="<gpu-partition>" \
+  --nodelist="<gpu-node>" \
+  --output="<external-run-root>/qwen3vl/slurm/coder-lora-train-%j.out" \
+  --error="<external-run-root>/qwen3vl/slurm/coder-lora-train-%j.err" \
+  backend/multimodal_science/qwen3vl/slurm/coder_lora_train.sbatch)"
+echo "LORA_FORMAL_JOB_ID=$formal_job_id"
+```
+
+The formal runner records `bitwise_determinism_claimed=false`: deterministic data order, seeds,
+and resumable RNG state do not justify a bit-exact claim for the current SDPA backward kernel.
+Use the resulting hash-bound adapter in the existing full prompt-only inference and
+answer-separated evaluation path before comparing it with zero-shot or specialist baselines.
+
 Multi-task rows are correlated views of the same source assets. The report therefore records
 source assets and derived instruction rows separately; instruction count must never be presented
 as the number of independent chromatograms or images. Image paths remain relative to the external

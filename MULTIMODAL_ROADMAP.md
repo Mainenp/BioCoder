@@ -6,7 +6,8 @@ training runner, independent run validator, and Qwen3-VL instruction/evaluation 
 implemented. The bilingual instruction Dataset has been materialized externally and its oracle
 evaluation contract verified. A prompt-only inference bundle, resumable Transformers runner, and
 generation-provenance gate are implemented. A train-only LoRA bundle builder and resumable
-single-GPU BF16 LoRA runner are implemented but have not yet passed a CUDA smoke run. A formal
+single-GPU BF16 LoRA runner have passed two independent CUDA smoke runs; the uncapped formal
+domain-training run has not started. A formal
 ChromPeakFormer detector baseline, both
 SequencePeakNet ablations, and a full Qwen3-VL-4B bilingual zero-shot baseline with failure-mode
 audit are verified externally. Qwen3-VL domain training, internal-test extraction, and all sealed
@@ -130,6 +131,25 @@ rescued 698 source-pixel-invalid boxes but changed mean IoU only from `0.1123` t
 Chinese it collapsed mean IoU from `0.3881` to `0.0078`. These are validation diagnostics, not a
 license to select a training protocol. Coordinate and bilingual consistency choices must be made
 on train-derived calibration groups.
+
+## Verified Qwen3-VL LoRA CUDA snapshot
+
+Slurm jobs `5626` and `5627` independently completed the same bounded Qwen3-VL-4B BF16 LoRA
+contract on separate RTX 5090 devices. Each run used 128 train-only instructions, performed two
+optimizer updates, saved a safe-tensor adapter, reloaded it, and generated 16 bounded validation
+responses without opening validation answers or internal-test data.
+
+Job `5626` measured `35.697` seconds of training wall time and `8.918` GiB peak allocated CUDA
+memory. Exactly 5,898,240 of 4,443,714,048 parameters were trainable (`0.1327%`), limited to 288
+LoRA tensors in language-attention projections; the persisted adapter was `22.547` MiB. Its
+training-report and adapter-manifest SHA-256 values are respectively
+`ddba96a84594771b10c56acba449dae849b6d747801eff7002082704f99a0cbd` and
+`e05263f778f0b2f0f462bf1118b157d0454420b33e1fb026b7f44cf5e2a81181`.
+
+The CUDA warning records that SDPA Flash Attention backward is not bitwise deterministic. Seeds,
+data order, optimizer state, scheduler state, and RNG checkpoints are controlled, but the project
+does not claim bit-exact replay. These two-step runs prove execution and reload contracts only;
+they are not accuracy evidence and remain development-comparison ineligible.
 
 The v2 numerical preflight then verified all 16,170 ROI crops across 98 XIC matrices. The unified
 Dataset materializer interpolated each crop on its true RT coordinates to 160 points and atomically

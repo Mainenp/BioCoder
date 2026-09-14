@@ -290,6 +290,24 @@ def reconcile_history(path: Path, checkpoint_step: int) -> int:
     return discarded
 
 
+def epoch_sample_indices(
+    record_count: int,
+    batch_size: int,
+    seed: int,
+    start_batch: int = 0,
+) -> list[int]:
+    """Return the deterministic epoch-order suffix needed by a resumed run."""
+
+    _require(record_count >= 1, "record_count must be positive")
+    _require(batch_size >= 1, "batch_size must be positive")
+    _require(start_batch >= 0, "start_batch must be nonnegative")
+    batch_count = math.ceil(record_count / batch_size)
+    _require(start_batch <= batch_count, "start_batch exceeds the epoch")
+    indices = list(range(record_count))
+    random.Random(seed).shuffle(indices)
+    return indices[min(start_batch * batch_size, record_count) :]
+
+
 def _optimizer_to_device(optimizer: Any, device: Any) -> None:
     for state in optimizer.state.values():
         for key, value in state.items():
@@ -594,28 +612,33 @@ def run_lora_training(
     optimizer.zero_grad(set_to_none=True)
     stop = False
     for epoch in range(int(state["epoch"]), settings.epochs):
-        generator = torch.Generator()
-        generator.manual_seed(settings.seed + epoch)
+        start_batch = (
+            int(state["next_batch_in_epoch"])
+            if epoch == int(state["epoch"])
+            else 0
+        )
+        sample_indices = epoch_sample_indices(
+            len(records),
+            settings.batch_size,
+            settings.seed + epoch,
+            start_batch,
+        )
         loader = DataLoader(
             TrainingRows(),
             batch_size=settings.batch_size,
-            shuffle=True,
-            generator=generator,
+            sampler=sample_indices,
             num_workers=0,
             collate_fn=Collator(),
             pin_memory=False,
         )
         accumulated = 0
         loss_sum = 0.0
-        start_batch = int(state["next_batch_in_epoch"]) if epoch == int(state["epoch"]) else 0
-        for batch_index, batch in enumerate(loader):
-            if batch_index < start_batch:
-                continue
+        for batch_index, batch in enumerate(loader, start=start_batch):
             batch = {key: value.to(device) for key, value in batch.items()}
             if accumulated == 0:
                 accumulation_target = min(
                     settings.gradient_accumulation_steps,
-                    len(loader) - batch_index,
+                    batches_per_epoch - batch_index,
                 )
             with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
                 outputs = model(**batch)
@@ -624,7 +647,7 @@ def run_lora_training(
             loss.backward()
             accumulated += 1
             loss_sum += float(raw_loss.detach().cpu())
-            is_last_batch = batch_index + 1 == len(loader)
+            is_last_batch = batch_index + 1 == batches_per_epoch
             if accumulated < accumulation_target and not is_last_batch:
                 continue
             grad_norm = torch.nn.utils.clip_grad_norm_(

@@ -347,6 +347,7 @@ def build_lora_training_bundle(
                 "asset_id": manifest["asset_id"],
                 "group_id": manifest["group_id"],
                 "image": manifest["image_path"],
+                "image_sha256": manifest["image_sha256"],
                 **stratum,
             }
         )

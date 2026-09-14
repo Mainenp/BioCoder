@@ -128,6 +128,8 @@ Status: planned. A requirement is complete only when its linked checks pass with
 - LoRA training masks image and user tokens from the loss and supervises only the assistant answer.
   The base language weights, vision tower, and visual merger remain frozen.
 - A run saves resumable adapter/optimizer/scheduler/RNG checkpoints and a final safe-tensor adapter.
+- Resume reconstructs the deterministic epoch order and starts the DataLoader at the first unseen
+  batch, rather than decoding and discarding all earlier images again.
 - Adapter inference verifies the training report, artifact manifest, every adapter artifact, exact
   base-model hash, and train-only/frozen-base contracts before PEFT model loading.
 - Adapter CLI identity arguments are all-or-none; smoke-trained adapters remain development-only
@@ -136,6 +138,9 @@ Status: planned. A requirement is complete only when its linked checks pass with
   utilization samples pass, performs two BF16 optimizer steps, reloads the persisted adapter
   through the hash-bound inference runner, and leaves both training and bounded generation
   explicitly ineligible for development comparison.
+- The scheduled formal runner stages immutable code, the model cache, and hash-verified training
+  images on node-local storage; it keeps resumable checkpoints on persistent storage, publishes
+  only after manifest verification, and is uncapped unless calibration limits are explicitly set.
   Training completion alone is not a development metric until answer-separated inference and
   evaluation pass on every validation instruction.
 - The 1D encoder output is projected into the expected multimodal representation shape.
