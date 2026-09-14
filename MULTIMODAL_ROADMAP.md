@@ -303,6 +303,11 @@ vision tower and merger remain frozen, and LoRA is limited to the language atten
 Scaling to multiple 48 GB GPUs is deferred until the single-GPU train/evaluate contract passes;
 QLoRA remains a fallback rather than the default.
 
+The first fusion sub-gate is an immutable, answer-isolated image/XIC link bundle plus a trainable
+1D sensor projector. Constant signals are retained with an availability mask. This sub-gate does
+not count as a completed fusion run until sensor tokens are injected into Qwen3-VL and the
+LoRA-plus-projector candidate is trained and evaluated on the same validation assets.
+
 ### Phase 8 — Dual-track evaluation
 
 Scientific evaluation:

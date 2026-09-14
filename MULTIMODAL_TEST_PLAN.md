@@ -160,6 +160,11 @@ Status: planned. A requirement is complete only when its linked checks pass with
   never summed into an independent scientific-sample count, and Qwen bbox IoU is never relabeled
   as detector COCO AP.
 - The 1D encoder output is projected into the expected multimodal representation shape.
+- Image/XIC link construction verifies the Dataset, LoRA bundle, and prompt-only bundle hashes;
+  rejects train/validation source-group overlap; preserves unavailable-signal masks; and never
+  opens validation answers.
+- The sensor projector maps each 160-point signal to four Qwen-width tokens behind a trainable
+  near-closed residual gate. Projector-only tests are not evidence of end-to-end Qwen fusion.
 - Every run emits an adapter or checkpoint, configuration snapshot, dataset version, logs, and run metadata.
 - Sequence-only and sequence-plus-metadata runs share the same encoder and heads so that their
   ablation changes exactly one input modality.

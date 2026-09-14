@@ -35,6 +35,14 @@ from multimodal_science.qwen3vl.development_comparison import (
     CrossFamilyComparisonResult,
     build_cross_family_development_comparison,
 )
+from multimodal_science.qwen3vl.fusion_data import (
+    FusionBundleResult,
+    build_fusion_bundle,
+)
+from multimodal_science.qwen3vl.sensor_projector import (
+    SensorProjectorSpec,
+    build_sensor_projector,
+)
 
 __all__ = [
     "AdapterSpec",
@@ -48,6 +56,9 @@ __all__ = [
     "ZeroShotAuditResult",
     "GenerationSettings",
     "CrossFamilyComparisonResult",
+    "FusionBundleResult",
+    "SensorProjectorSpec",
+    "build_fusion_bundle",
     "build_inference_bundle",
     "build_instruction_dataset",
     "build_lora_training_bundle",
@@ -56,4 +67,5 @@ __all__ = [
     "audit_zero_shot_failures",
     "run_qwen_inference",
     "run_lora_training",
+    "build_sensor_projector",
 ]

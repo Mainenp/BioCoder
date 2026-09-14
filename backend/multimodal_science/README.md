@@ -640,6 +640,31 @@ For shared servers, export those six report/output paths plus the repository, Py
 revision variables, then submit `qwen3vl/slurm/coder_compare_development.sbatch`; it uses the
 required `coder` job name and requests only one CPU and 4 GiB RAM.
 
+Before training image-plus-XIC fusion, materialize an answer-isolated link bundle. The builder
+joins all 54,335 train instructions and 13,708 prompt-only validation rows to the normalized
+160-point XIC arrays while preserving the true independent asset counts (14,355 train and 1,815
+validation). It verifies every source report and array hash, rejects source-group overlap, and
+never opens validation answers. A missing/constant XIC remains a zero-valued sensor input with an
+explicit availability flag; it is not silently dropped.
+
+```bash
+python -m multimodal_science.qwen3vl.build_fusion_bundle_cli \
+  --dataset-root "<multimodal-v1-160>" \
+  --dataset-report-sha256 "<dataset-report-digest>" \
+  --lora-bundle-root "<formal-lora-bundle>" \
+  --lora-bundle-report-sha256 "<lora-bundle-report-digest>" \
+  --inference-bundle-root "<prompt-only-inference-bundle>" \
+  --inference-bundle-report-sha256 "<inference-bundle-report-digest>" \
+  --output-dir "<external-run-root>/qwen3vl/fusion/bundles/image-xic-v1"
+```
+
+On Slurm, set the corresponding `BIOCODER_*` variables and submit
+`qwen3vl/slurm/coder_build_fusion_bundle.sbatch`. This is a one-CPU metadata job and does not
+reserve a GPU. The accompanying trainable sensor projector converts each 160-point XIC into four
+Qwen-width tokens behind a near-closed residual gate. Bundle and projector completion alone do
+not constitute Qwen fusion: the next gate is injection into the Qwen embedding stream followed by
+LoRA-plus-projector training and same-validation evaluation.
+
 Multi-task rows are correlated views of the same source assets. The report therefore records
 source assets and derived instruction rows separately; instruction count must never be presented
 as the number of independent chromatograms or images. Image paths remain relative to the external
