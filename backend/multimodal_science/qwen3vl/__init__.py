@@ -31,6 +31,10 @@ from multimodal_science.qwen3vl.lora_training import (
     LoraTrainingSettings,
     run_lora_training,
 )
+from multimodal_science.qwen3vl.development_comparison import (
+    CrossFamilyComparisonResult,
+    build_cross_family_development_comparison,
+)
 
 __all__ = [
     "AdapterSpec",
@@ -43,9 +47,11 @@ __all__ = [
     "QwenInferenceResult",
     "ZeroShotAuditResult",
     "GenerationSettings",
+    "CrossFamilyComparisonResult",
     "build_inference_bundle",
     "build_instruction_dataset",
     "build_lora_training_bundle",
+    "build_cross_family_development_comparison",
     "evaluate_qwen_predictions",
     "audit_zero_shot_failures",
     "run_qwen_inference",

@@ -6,12 +6,13 @@ training runner, independent run validator, and Qwen3-VL instruction/evaluation 
 implemented. The bilingual instruction Dataset has been materialized externally and its oracle
 evaluation contract verified. A prompt-only inference bundle, resumable Transformers runner, and
 generation-provenance gate are implemented. A train-only LoRA bundle builder and resumable
-single-GPU BF16 LoRA runner have passed two independent CUDA smoke runs; the uncapped formal
-domain-training run has not started. A formal
+single-GPU BF16 LoRA runner have passed two independent CUDA smoke runs. The uncapped 54,335-row
+formal LoRA run completed 3,396 optimizer updates, and its full 13,708-prompt answer-separated
+validation evaluation passed the development-evidence contract. A formal
 ChromPeakFormer detector baseline, both
 SequencePeakNet ablations, and a full Qwen3-VL-4B bilingual zero-shot baseline with failure-mode
-audit are verified externally. Qwen3-VL domain training, internal-test extraction, and all sealed
-benchmark claims remain incomplete.
+audit are verified externally. Cross-family comparison is implemented; internal-test extraction,
+fusion training, replicated seeds, and all sealed benchmark claims remain incomplete.
 
 ## Verified Phase A snapshot
 

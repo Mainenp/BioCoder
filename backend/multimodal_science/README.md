@@ -619,6 +619,27 @@ The runner rejects partial prompt coverage, an unloaded or hash-mismatched adapt
 generation provenance, internal-test access, and any final-benchmark claim. Its output is valid
 development evidence only; the sealed internal test remains untouched.
 
+After both full Qwen runs and the specialist ablation are verified, build one cross-family report:
+
+```bash
+python -m multimodal_science.qwen3vl.compare_development_cli \
+  --specialist-comparison "<comparison-root>/development_ablation_report.json" \
+  --zero-shot-generation "<zero-shot-run>/generation_report.json" \
+  --zero-shot-evaluation "<zero-shot-evaluation>/qwen_evaluation_report.json" \
+  --lora-generation "<lora-run>/generation_report.json" \
+  --lora-evaluation "<lora-evaluation>/qwen_evaluation_report.json" \
+  --output-dir "<comparison-root>/cross-family-development"
+```
+
+The builder verifies every supplied report hash, the shared Dataset and prompt artifacts, the
+immutable base model, the absence/presence of the LoRA adapter, and complete paired bilingual
+coverage. Its primary Qwen rows are per-language: English and Chinese prompts are two views of
+the same 1,815 validation assets, never 3,630 independent scientific samples. COCO AP remains
+detector-only and Qwen grounding is reported separately as bbox IoU.
+For shared servers, export those six report/output paths plus the repository, Python, and code
+revision variables, then submit `qwen3vl/slurm/coder_compare_development.sbatch`; it uses the
+required `coder` job name and requests only one CPU and 4 GiB RAM.
+
 Multi-task rows are correlated views of the same source assets. The report therefore records
 source assets and derived instruction rows separately; instruction count must never be presented
 as the number of independent chromatograms or images. Image paths remain relative to the external

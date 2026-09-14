@@ -152,6 +152,13 @@ Status: planned. A requirement is complete only when its linked checks pass with
   atomically materializes directory manifests after the inference and evaluator CLIs publish their
   native artifacts, so a post-generation scheduler retry reuses predictions instead of rerunning
   the model.
+- The cross-family development report accepts only provenance-verified full Qwen generation and
+  evaluation pairs, checks that zero-shot has no adapter and LoRA has a completed adapter, and
+  binds both to the same immutable base model, instruction artifacts, Dataset, validation assets,
+  and source groups as the specialist ablation.
+- Cross-family Qwen metrics are primary per-language rows. Paired English and Chinese prompts are
+  never summed into an independent scientific-sample count, and Qwen bbox IoU is never relabeled
+  as detector COCO AP.
 - The 1D encoder output is projected into the expected multimodal representation shape.
 - Every run emits an adapter or checkpoint, configuration snapshot, dataset version, logs, and run metadata.
 - Sequence-only and sequence-plus-metadata runs share the same encoder and heads so that their
