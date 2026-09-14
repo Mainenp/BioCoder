@@ -143,6 +143,10 @@ Status: planned. A requirement is complete only when its linked checks pass with
   only after manifest verification, and is uncapped unless calibration limits are explicitly set.
   Training completion alone is not a development metric until answer-separated inference and
   evaluation pass on every validation instruction.
+- The scheduled adapter-evaluation runner independently binds the completed training report and
+  adapter manifest, stages and copy-verifies all validation images on node-local storage, resumes
+  the prompt-only generation journal, and accepts development evidence only after all 13,708
+  bilingual prompts pass generation-provenance and answer-separated evaluation contracts.
 - The 1D encoder output is projected into the expected multimodal representation shape.
 - Every run emits an adapter or checkpoint, configuration snapshot, dataset version, logs, and run metadata.
 - Sequence-only and sequence-plus-metadata runs share the same encoder and heads so that their

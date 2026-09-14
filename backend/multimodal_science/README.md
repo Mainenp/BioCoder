@@ -582,6 +582,34 @@ and resumable RNG state do not justify a bit-exact claim for the current SDPA ba
 Use the resulting hash-bound adapter in the existing full prompt-only inference and
 answer-separated evaluation path before comparing it with zero-shot or specialist baselines.
 
+Submit that full adapter validation through the dedicated `coder_lora_evaluate.sbatch` runner.
+It stages immutable code, the prompt-only bundle, all 1,815 validation images, and a stable local
+model cache; validation image copies are byte-verified before CUDA starts. The adapter is accepted
+only with the exact training-report and artifact-manifest hashes printed by the formal training
+job. Generation is greedy, covers all 13,708 bilingual prompts, and uses the inference runner's
+persistent journal for safe resume. Only after generation is atomically published does the script
+open the separate answer key through the evaluator:
+
+```bash
+export BIOCODER_ADAPTER_ROOT="<formal-training-output>"
+export BIOCODER_ADAPTER_TRAINING_REPORT_SHA256="<training-report-digest>"
+export BIOCODER_ADAPTER_MANIFEST_SHA256="<artifact-manifest-digest>"
+export BIOCODER_INFERENCE_BATCH_SIZE=2
+export BIOCODER_BOOTSTRAP_ITERATIONS=1000
+
+evaluation_job_id="$(sbatch --parsable \
+  --partition="<gpu-partition>" \
+  --nodelist="<gpu-node>" \
+  --output="<external-run-root>/qwen3vl/slurm/coder-lora-eval-%j.out" \
+  --error="<external-run-root>/qwen3vl/slurm/coder-lora-eval-%j.err" \
+  backend/multimodal_science/qwen3vl/slurm/coder_lora_evaluate.sbatch)"
+echo "LORA_EVALUATION_JOB_ID=$evaluation_job_id"
+```
+
+The runner rejects partial prompt coverage, an unloaded or hash-mismatched adapter, unverified
+generation provenance, internal-test access, and any final-benchmark claim. Its output is valid
+development evidence only; the sealed internal test remains untouched.
+
 Multi-task rows are correlated views of the same source assets. The report therefore records
 source assets and derived instruction rows separately; instruction count must never be presented
 as the number of independent chromatograms or images. Image paths remain relative to the external

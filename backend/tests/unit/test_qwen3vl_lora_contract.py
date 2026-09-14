@@ -175,6 +175,27 @@ def make_adapter(root: Path, *, development_complete: bool = True) -> AdapterSpe
 
 
 class Qwen3VlLoraContractTests(unittest.TestCase):
+    def test_formal_evaluation_slurm_script_is_hash_bound_and_resumable(self) -> None:
+        script_path = (
+            Path(__file__).parents[2]
+            / "multimodal_science/qwen3vl/slurm/coder_lora_evaluate.sbatch"
+        )
+        script = script_path.read_text(encoding="utf-8")
+
+        self.assertIn("#SBATCH --job-name=coder", script)
+        self.assertIn("BIOCODER_ADAPTER_TRAINING_REPORT_SHA256", script)
+        self.assertIn("BIOCODER_ADAPTER_MANIFEST_SHA256", script)
+        self.assertIn("LOCAL_VALIDATION_IMAGE_COPIES=OK", script)
+        self.assertIn("RESUME_GENERATION=YES", script)
+        self.assertIn('generation_resume="$run_root/qwen3vl/runs/.${run_name}.work"', script)
+        self.assertIn('--output-dir "$generation_final"', script)
+        self.assertIn("evaluate_predictions_cli", script)
+        self.assertIn('generation["counts"]["predictions"]', script)
+        self.assertIn('generation["scope"]["complete_prompt_coverage"]', script)
+        self.assertIn("prediction_generation_provenance_verified", script)
+        self.assertIn("LORA_FULL_EVALUATION_CONTRACT=OK", script)
+        self.assertNotIn("--max-records", script)
+
     def test_formal_slurm_script_is_guarded_resumable_and_uncapped_by_default(self) -> None:
         script_path = (
             Path(__file__).parents[2]
