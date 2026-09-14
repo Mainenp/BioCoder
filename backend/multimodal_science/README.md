@@ -563,7 +563,8 @@ echo "LORA_CALIBRATION_JOB_ID=$calibration_job_id"
 After that calibration passes the memory guard, remove both explicit caps to request the complete
 54,335-row, one-epoch development training run. The default effective batch size is 16. The
 formal job still does not access validation answers, does not evaluate itself, and cannot claim a
-final benchmark:
+final benchmark. A non-blocking persistent run lock also rejects duplicate jobs targeting the
+same code revision and training configuration before they can share history or checkpoints:
 
 ```bash
 unset BIOCODER_MAX_RECORDS BIOCODER_MAX_STEPS

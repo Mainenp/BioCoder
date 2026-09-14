@@ -112,6 +112,15 @@ work_output="$output_root/.${run_name}.incomplete"
 final_output="$output_root/$run_name"
 bundle_dir="$run_root/qwen3vl/lora/bundles/${bundle_label}-seed${seed}-${code_short}"
 
+mkdir -p "$output_root"
+run_lock="$output_root/.${run_name}.lock"
+exec 7>"$run_lock"
+flock -n 7 || {
+  echo "Another job already owns this exact LoRA run: $run_name" >&2
+  exit 7
+}
+echo "RUN_LOCK_ACQUIRED=$run_lock"
+
 verify_training_output() {
   local output="$1"
   (
@@ -161,7 +170,7 @@ if [[ -d "$final_output" ]]; then
   exit 0
 fi
 
-mkdir -p "$(dirname "$bundle_dir")" "$output_root"
+mkdir -p "$(dirname "$bundle_dir")"
 if [[ -d "$bundle_dir" ]]; then
   echo "=== VERIFY EXISTING TRAIN-ONLY BUNDLE ==="
   (

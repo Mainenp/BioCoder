@@ -141,6 +141,8 @@ Status: planned. A requirement is complete only when its linked checks pass with
 - The scheduled formal runner stages immutable code, the model cache, and hash-verified training
   images on node-local storage; it keeps resumable checkpoints on persistent storage, publishes
   only after manifest verification, and is uncapped unless calibration limits are explicitly set.
+  An exclusive run-level lock rejects a duplicate job targeting the same revision and training
+  configuration before either process can share history or checkpoint files.
   Training completion alone is not a development metric until answer-separated inference and
   evaluation pass on every validation instruction.
 - The scheduled adapter-evaluation runner independently binds the completed training report and
