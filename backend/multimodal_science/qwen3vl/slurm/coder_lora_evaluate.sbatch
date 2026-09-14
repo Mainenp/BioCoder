@@ -146,7 +146,12 @@ actual_revision="$(git -C "$repo_root" rev-parse HEAD)"
   exit 3
 }
 
-run_name="qwen3vl-4b-lora-validation-${adapter_short}-${code_short}"
+default_run_name="qwen3vl-4b-lora-validation-${adapter_short}-${code_short}"
+run_name="${BIOCODER_LORA_EVALUATION_RUN_NAME:-$default_run_name}"
+[[ "$run_name" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || {
+  echo "BIOCODER_LORA_EVALUATION_RUN_NAME is unsafe: $run_name" >&2
+  exit 2
+}
 generation_final="$run_root/qwen3vl/runs/$run_name"
 generation_resume="$run_root/qwen3vl/runs/.${run_name}.work"
 evaluation_final="$run_root/qwen3vl/evaluations/${run_name}-evaluation"
@@ -158,6 +163,7 @@ echo "NODE=$(hostname -s)"
 echo "CODE_REVISION=$actual_revision"
 echo "ADAPTER_TRAINING_REPORT_SHA256=$BIOCODER_ADAPTER_TRAINING_REPORT_SHA256"
 echo "ADAPTER_MANIFEST_SHA256=$BIOCODER_ADAPTER_MANIFEST_SHA256"
+echo "EVALUATION_RUN_NAME=$run_name"
 echo "INFERENCE_BATCH_SIZE=$batch_size"
 echo "BOOTSTRAP_ITERATIONS=$bootstrap_iterations"
 

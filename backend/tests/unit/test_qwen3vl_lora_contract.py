@@ -185,6 +185,8 @@ class Qwen3VlLoraContractTests(unittest.TestCase):
         self.assertIn("#SBATCH --job-name=coder", script)
         self.assertIn("BIOCODER_ADAPTER_TRAINING_REPORT_SHA256", script)
         self.assertIn("BIOCODER_ADAPTER_MANIFEST_SHA256", script)
+        self.assertIn("BIOCODER_LORA_EVALUATION_RUN_NAME", script)
+        self.assertIn("EVALUATION_RUN_NAME", script)
         self.assertIn("LOCAL_VALIDATION_IMAGE_COPIES=OK", script)
         self.assertIn("RESUME_GENERATION=YES", script)
         self.assertIn('generation_resume="$run_root/qwen3vl/runs/.${run_name}.work"', script)

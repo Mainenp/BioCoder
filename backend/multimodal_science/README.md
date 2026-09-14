@@ -594,6 +594,11 @@ directory manifests after each CLI atomically publishes its native files; if a s
 starts after generation, it validates and reuses those predictions instead of running the model
 again:
 
+For recovery of an already published generation produced by an older wrapper revision, set
+`BIOCODER_LORA_EVALUATION_RUN_NAME` to that exact safe directory basename. The override changes
+only artifact discovery; all model, adapter, bundle, and report hashes are still independently
+verified.
+
 ```bash
 export BIOCODER_ADAPTER_ROOT="<formal-training-output>"
 export BIOCODER_ADAPTER_TRAINING_REPORT_SHA256="<training-report-digest>"
