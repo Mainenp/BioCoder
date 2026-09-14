@@ -52,6 +52,62 @@ code_short="${BIOCODER_CODE_REVISION:0:7}"
 model_short="${BIOCODER_MODEL_ARTIFACT_SHA256:0:16}"
 adapter_short="${BIOCODER_ADAPTER_TRAINING_REPORT_SHA256:0:12}"
 
+ensure_artifact_manifest() {
+  local root="$1"
+  shift
+  "$python_bin" - "$root" "$@" <<'PY'
+import hashlib
+import os
+import pathlib
+import sys
+
+root = pathlib.Path(sys.argv[1]).resolve()
+required = sys.argv[2:]
+if not root.is_dir():
+    raise FileNotFoundError(root)
+for relative in required:
+    path = root / relative
+    if not path.is_file():
+        raise FileNotFoundError(path)
+
+manifest = root / "artifact_manifest.sha256"
+if not manifest.exists():
+    files = sorted(
+        path
+        for path in root.rglob("*")
+        if path.is_file()
+        and path != manifest
+        and not path.name.startswith(".artifact_manifest.sha256.")
+    )
+    if not files:
+        raise ValueError(f"No artifacts found under {root}")
+
+    def digest(path):
+        hasher = hashlib.sha256()
+        with path.open("rb") as stream:
+            for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                hasher.update(chunk)
+        return hasher.hexdigest()
+
+    temporary = root / f".artifact_manifest.sha256.{os.getpid()}.tmp"
+    temporary.write_text(
+        "".join(
+            f"{digest(path)}  {path.relative_to(root).as_posix()}\n"
+            for path in files
+        ),
+        encoding="utf-8",
+    )
+    os.replace(temporary, manifest)
+    print(f"ARTIFACT_MANIFEST_CREATED={manifest}")
+else:
+    print(f"ARTIFACT_MANIFEST_REUSED={manifest}")
+PY
+  (
+    cd "$root"
+    sha256sum -c artifact_manifest.sha256
+  )
+}
+
 for numeric_value in \
   "$seed" "$batch_size" "$bootstrap_iterations" "$max_gpu_used_mib" \
   "$max_gpu_utilization" "$min_local_free_gib"
@@ -299,10 +355,10 @@ PY
 mkdir -p "$(dirname "$generation_final")" "$(dirname "$evaluation_final")"
 if [[ -d "$generation_final" ]]; then
   echo "=== VERIFY EXISTING COMPLETE GENERATION ==="
-  (
-    cd "$generation_final"
-    sha256sum -c artifact_manifest.sha256
-  )
+  ensure_artifact_manifest \
+    "$generation_final" \
+    generation_report.json predictions.jsonl generation_records.jsonl \
+    run_config.json runtime_metadata.json
 else
   resume_arguments=()
   if [[ -d "$generation_resume" ]]; then
@@ -331,10 +387,10 @@ else
     --device-map auto \
     --attention-implementation sdpa \
     "${resume_arguments[@]}"
-  (
-    cd "$generation_final"
-    sha256sum -c artifact_manifest.sha256
-  )
+  ensure_artifact_manifest \
+    "$generation_final" \
+    generation_report.json predictions.jsonl generation_records.jsonl \
+    run_config.json runtime_metadata.json
 fi
 
 generation_report_sha256="$(sha256sum "$generation_final/generation_report.json" | awk '{print $1}')"
@@ -342,10 +398,8 @@ echo "GENERATION_REPORT_SHA256=$generation_report_sha256"
 
 if [[ -d "$evaluation_final" ]]; then
   echo "=== VERIFY EXISTING COMPLETE EVALUATION ==="
-  (
-    cd "$evaluation_final"
-    sha256sum -c artifact_manifest.sha256
-  )
+  ensure_artifact_manifest \
+    "$evaluation_final" qwen_evaluation_report.json evaluation_records.jsonl
 else
   evaluation_staging="$scratch/evaluation"
   echo "=== RUN ANSWER-SEPARATED EVALUATION ==="
@@ -359,10 +413,8 @@ else
     --generation-report-sha256 "$generation_report_sha256" \
     --bootstrap-iterations "$bootstrap_iterations" \
     --seed "$seed"
-  (
-    cd "$evaluation_staging"
-    sha256sum -c artifact_manifest.sha256
-  )
+  ensure_artifact_manifest \
+    "$evaluation_staging" qwen_evaluation_report.json evaluation_records.jsonl
   mv "$evaluation_staging" "$evaluation_final"
 fi
 

@@ -148,7 +148,10 @@ Status: planned. A requirement is complete only when its linked checks pass with
 - The scheduled adapter-evaluation runner independently binds the completed training report and
   adapter manifest, stages and copy-verifies all validation images on node-local storage, resumes
   the prompt-only generation journal, and accepts development evidence only after all 13,708
-  bilingual prompts pass generation-provenance and answer-separated evaluation contracts.
+  bilingual prompts pass generation-provenance and answer-separated evaluation contracts. It
+  atomically materializes directory manifests after the inference and evaluator CLIs publish their
+  native artifacts, so a post-generation scheduler retry reuses predictions instead of rerunning
+  the model.
 - The 1D encoder output is projected into the expected multimodal representation shape.
 - Every run emits an adapter or checkpoint, configuration snapshot, dataset version, logs, and run metadata.
 - Sequence-only and sequence-plus-metadata runs share the same encoder and heads so that their

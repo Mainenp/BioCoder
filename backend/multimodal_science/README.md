@@ -589,7 +589,10 @@ model cache; validation image copies are byte-verified before CUDA starts. The a
 only with the exact training-report and artifact-manifest hashes printed by the formal training
 job. Generation is greedy, covers all 13,708 bilingual prompts, and uses the inference runner's
 persistent journal for safe resume. Only after generation is atomically published does the script
-open the separate answer key through the evaluator:
+open the separate answer key through the evaluator. The runner materializes and verifies complete
+directory manifests after each CLI atomically publishes its native files; if a scheduler retry
+starts after generation, it validates and reuses those predictions instead of running the model
+again:
 
 ```bash
 export BIOCODER_ADAPTER_ROOT="<formal-training-output>"
