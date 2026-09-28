@@ -34,7 +34,7 @@ from multimodal_science.qwen3vl.sensor_projector import (
 FUSION_SMOKE_SCHEMA = "chrompeak-qwen3vl-xic-fusion-smoke-v1"
 GPU_ALLOCATION_MODE = "manual_physical_index_guard_no_slurm_gres"
 REQUIRED_RUNTIME_PACKAGES = {
-    "numpy": "2.1.2",
+    "numpy": "1.26.4",
     "torch": "2.11.0+cu128",
     "transformers": "4.57.1",
     "peft": "0.17.1",

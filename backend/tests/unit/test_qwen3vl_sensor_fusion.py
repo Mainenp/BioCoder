@@ -7,6 +7,7 @@ from pathlib import Path
 
 from multimodal_science.data.manifest import sha256_file
 from multimodal_science.qwen3vl.fusion_smoke import (
+    REQUIRED_RUNTIME_PACKAGES,
     _bounded_training_rows,
     _verify_model_manifest,
     _verify_mrope_insertion,
@@ -15,6 +16,18 @@ from multimodal_science.qwen3vl.sensor_fusion import insert_sensor_embeddings
 
 
 class SensorFusionTests(unittest.TestCase):
+    def test_runtime_contract_matches_the_deployed_qwen_environment(self) -> None:
+        self.assertEqual(
+            REQUIRED_RUNTIME_PACKAGES,
+            {
+                "numpy": "1.26.4",
+                "torch": "2.11.0+cu128",
+                "transformers": "4.57.1",
+                "peft": "0.17.1",
+                "safetensors": "0.6.2",
+            },
+        )
+
     def test_bounded_training_rows_rejects_fewer_rows_than_updates(self) -> None:
         with self.assertRaisesRegex(ValueError, "Requested 2 updates"):
             _bounded_training_rows([{"row": 1}], 2)
