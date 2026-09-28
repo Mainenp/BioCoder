@@ -661,9 +661,38 @@ python -m multimodal_science.qwen3vl.build_fusion_bundle_cli \
 On Slurm, set the corresponding `BIOCODER_*` variables and submit
 `qwen3vl/slurm/coder_build_fusion_bundle.sbatch`. This is a one-CPU metadata job and does not
 reserve a GPU. The accompanying trainable sensor projector converts each 160-point XIC into four
-Qwen-width tokens behind a near-closed residual gate. Bundle and projector completion alone do
-not constitute Qwen fusion: the next gate is injection into the Qwen embedding stream followed by
-LoRA-plus-projector training and same-validation evaluation.
+Qwen-width tokens behind a near-closed residual gate. A learned availability embedding preserves
+the distinction between a measured zero trace and a missing XIC. Bundle and projector completion
+alone do not constitute Qwen fusion: the next gate is injection into the Qwen embedding stream
+followed by LoRA-plus-projector training and same-validation evaluation.
+
+The bounded fusion smoke inserts four projected XIC embeddings immediately before the assistant
+response without changing Qwen's tokenizer or output vocabulary. The inserted positions are
+masked from the language-model loss. Shadow text IDs are used only to derive explicit native
+Qwen3-VL multimodal RoPE positions; image placeholders are still replaced by the official vision
+path, while the image-only LoRA initializes the language path.
+Only LoRA weights and the sensor projector are trainable; the visual tower, merger, and base
+language weights stay frozen. Submit `qwen3vl/slurm/coder_fusion_smoke.sbatch` after providing the
+hash-verified fusion bundle, formal LoRA adapter, Dataset, assets, and immutable base model through
+its `BIOCODER_*` variables. The job requires and verifies a full-file model manifest, stages an
+immutable Git archive, local model cache, and train-only input roots containing only the selected
+train rows/images, strips the original source-root variables from the child environment, rejects
+dirty source trees, and fails on drift from the verified
+NumPy 2.1.2, Torch 2.11.0+cu128, Transformers 4.57.1, PEFT 0.17.1, and safetensors 0.6.2
+runtime. This is an auditable input-scoping control, not a chroot/container security boundary. A
+successful two-update smoke verifies native
+M-RoPE prefix/suffix positions, observes the visual-tower forward hook, requires separate nonzero
+gradients for every LoRA attention target and projector submodule, proves both parameter groups
+changed by exact state digests, and reloads the serialized adapter/projector. It is evidence only
+after its saved manifest and success markers pass, and remains ineligible for development
+comparison.
+
+The current cluster advertises `Gres=(null)` for its GPU partitions, so Slurm cannot provide a
+GPU TRES reservation for this job. The script records this limitation explicitly and uses a
+user-scoped physical-GPU lock plus three startup samples of memory and utilization. This prevents
+collisions with cooperating BioCoder jobs but is not claimed as scheduler-enforced exclusivity.
+When the cluster enables GPU GRES, replace this fallback with a scheduler-issued single-GPU
+allocation before treating the execution contract as portable to other users or clusters.
 
 Multi-task rows are correlated views of the same source assets. The report therefore records
 source assets and derived instruction rows separately; instruction count must never be presented

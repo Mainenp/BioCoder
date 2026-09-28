@@ -165,6 +165,14 @@ Status: planned. A requirement is complete only when its linked checks pass with
   opens validation answers.
 - The sensor projector maps each 160-point signal to four Qwen-width tokens behind a trainable
   near-closed residual gate. Projector-only tests are not evidence of end-to-end Qwen fusion.
+- The fusion CUDA smoke must insert four continuous sensor embeddings before the assistant
+  response without changing Qwen's tokenizer or output vocabulary, retain the native image path,
+  preserve explicit multimodal RoPE prefix/suffix relations, execute the frozen visual tower,
+  prove nonzero gradients for every LoRA attention target and every projector submodule, bind
+  before/after parameter-state digests, consume staged train-only input roots from an environment
+  that does not expose the original source-root variables, bind
+  serialized outputs and the complete base-model file manifest by hash, reload saved weights, and
+  remain development-comparison ineligible.
 - Every run emits an adapter or checkpoint, configuration snapshot, dataset version, logs, and run metadata.
 - Sequence-only and sequence-plus-metadata runs share the same encoder and heads so that their
   ablation changes exactly one input modality.

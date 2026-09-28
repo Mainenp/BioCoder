@@ -97,13 +97,22 @@ def build_sensor_projector(spec: SensorProjectorSpec) -> Any:
                 nn.Linear(spec.hidden_size, spec.hidden_size),
                 nn.LayerNorm(spec.hidden_size),
             )
+            self.availability_embedding = nn.Embedding(2, spec.hidden_size)
             self.gate_logit = nn.Parameter(torch.tensor(-4.0))
 
-        def forward(self, signals: Any) -> Any:
+        def forward(self, signals: Any, availability: Any = None) -> Any:
             if signals.ndim != 2 or signals.shape[1] != spec.input_points:
                 raise ValueError(
                     f"Expected [batch, {spec.input_points}] signals, got {tuple(signals.shape)}"
                 )
+            if availability is None:
+                availability = torch.ones(
+                    signals.shape[0], dtype=torch.bool, device=signals.device
+                )
+            if availability.ndim != 1 or availability.shape[0] != signals.shape[0]:
+                raise ValueError("Availability must contain one value per signal")
+            availability = availability.to(device=signals.device, dtype=torch.bool)
+            signals = signals * availability.unsqueeze(1).to(dtype=signals.dtype)
             encoded = self.encoder(signals.unsqueeze(1))
             points = int(encoded.shape[-1])
             width = points // spec.sensor_tokens
@@ -111,6 +120,8 @@ def build_sensor_projector(spec: SensorProjectorSpec) -> Any:
                 encoded.shape[0], encoded.shape[1], spec.sensor_tokens, width
             ).mean(dim=-1)
             tokens = self.projector(pooled.transpose(1, 2))
+            availability_tokens = self.availability_embedding(availability.long())
+            tokens = tokens + availability_tokens.unsqueeze(1).to(dtype=tokens.dtype)
             return tokens * self.gate_logit.sigmoid()
 
     return SensorProjector()

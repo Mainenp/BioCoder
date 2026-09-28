@@ -43,6 +43,7 @@ from multimodal_science.qwen3vl.sensor_projector import (
     SensorProjectorSpec,
     build_sensor_projector,
 )
+from multimodal_science.qwen3vl.sensor_fusion import insert_sensor_embeddings
 
 __all__ = [
     "AdapterSpec",
@@ -68,4 +69,5 @@ __all__ = [
     "run_qwen_inference",
     "run_lora_training",
     "build_sensor_projector",
+    "insert_sensor_embeddings",
 ]

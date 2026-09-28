@@ -259,11 +259,18 @@ class QwenFusionContractTests(unittest.TestCase):
         spec = SensorProjectorSpec(hidden_size=128, sensor_tokens=4)
         model = build_sensor_projector(spec)
         signals = torch.ones((2, 160), dtype=torch.float32)
+        availability = torch.tensor([True, False])
+        model.eval()
 
-        tokens = model(signals)
+        tokens = model(signals, availability)
+        missing_from_zero = model(torch.zeros_like(signals[1:]), torch.tensor([False]))
+        measured_zero = model(torch.zeros_like(signals[1:]), torch.tensor([True]))
 
         self.assertEqual(tuple(tokens.shape), (2, 4, 128))
         self.assertGreater(float(tokens.abs().sum()), 0.0)
+        self.assertTrue(torch.allclose(tokens[1:], missing_from_zero))
+        self.assertFalse(torch.allclose(tokens[:1], tokens[1:]))
+        self.assertFalse(torch.allclose(measured_zero, missing_from_zero))
         self.assertAlmostEqual(float(model.gate_logit), -4.0)
 
     def test_slurm_builder_is_cpu_only_answer_isolated_and_hash_bound(self) -> None:
