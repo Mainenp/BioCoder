@@ -87,6 +87,26 @@ def _artifact(root: Path, report: dict[str, Any], key: str) -> Path:
     return path
 
 
+def _bind_adapter_training_rows(
+    adapter_metadata: dict[str, Any],
+    train_rows_path: Path,
+) -> str:
+    """Require the initial adapter to have trained on the exact fused train rows."""
+
+    source = _object(adapter_metadata.get("source"), "LoRA training source")
+    expected = source.get("train_rows_sha256")
+    _require(
+        isinstance(expected, str) and bool(_HEX_64.fullmatch(expected)),
+        "Initial adapter omits a valid training-row hash",
+    )
+    actual = sha256_file(train_rows_path)
+    _require(
+        expected == actual,
+        "Initial adapter training rows do not match the fusion LoRA bundle",
+    )
+    return actual
+
+
 def _write_json(path: Path, payload: dict[str, Any]) -> None:
     path.write_text(
         json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
@@ -375,7 +395,8 @@ def run_fusion_smoke(
     )
 
     train_links = _read_jsonl(_artifact(fusion_root, fusion_report, "train_xic_links"), "links")
-    train_rows = _read_jsonl(_artifact(lora_root, lora_report, "train_qwen"), "train rows")
+    train_rows_path = _artifact(lora_root, lora_report, "train_qwen")
+    train_rows = _read_jsonl(train_rows_path, "train rows")
     selections = _read_jsonl(
         _artifact(lora_root, lora_report, "selection_manifest"), "selection rows"
     )
@@ -449,6 +470,10 @@ def run_fusion_smoke(
     _require(
         adapter_metadata.get("development_training_complete") is True,
         "Fusion must initialize from the completed image-only LoRA adapter",
+    )
+    adapter_train_rows_sha256 = _bind_adapter_training_rows(
+        adapter_metadata,
+        train_rows_path,
     )
 
     try:
@@ -800,6 +825,7 @@ def run_fusion_smoke(
             "fusion_bundle_report_sha256": fusion_bundle_report_sha256,
             "lora_bundle_report_sha256": lora_bundle_report_sha256,
             "dataset_report_sha256": dataset_report_sha256,
+            "adapter_train_rows_sha256": adapter_train_rows_sha256,
             "initial_adapter": adapter_metadata,
         },
         "model": {
@@ -854,6 +880,7 @@ def run_fusion_smoke(
             "reproducibility_seeded": True,
             "bitwise_determinism_claimed": False,
             "staged_train_only_input_roots": True,
+            "initial_adapter_training_rows_bound": True,
             "validation_answers_opened": False,
             "internal_test_accessed": False,
         },

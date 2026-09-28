@@ -322,6 +322,7 @@ for contract in (
     "projector_reloaded",
     "reproducibility_seeded",
     "staged_train_only_input_roots",
+    "initial_adapter_training_rows_bound",
 ):
     require(report["contracts"][contract] is True, f"Contract failed: {contract}")
 require(

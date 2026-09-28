@@ -677,8 +677,9 @@ hash-verified fusion bundle, formal LoRA adapter, Dataset, assets, and immutable
 its `BIOCODER_*` variables. The job requires and verifies a full-file model manifest, stages an
 immutable Git archive, local model cache, and train-only input roots containing only the selected
 train rows/images, strips the original source-root variables from the child environment, rejects
-dirty source trees, and fails on drift from the verified
-NumPy 2.1.2, Torch 2.11.0+cu128, Transformers 4.57.1, PEFT 0.17.1, and safetensors 0.6.2
+dirty source trees, requires the initial image-only adapter's recorded training-row SHA-256 to
+equal the exact fusion LoRA train file, and fails on drift from the verified
+NumPy 1.26.4, Torch 2.11.0+cu128, Transformers 4.57.1, PEFT 0.17.1, and safetensors 0.6.2
 runtime. This is an auditable input-scoping control, not a chroot/container security boundary. A
 successful two-update smoke verifies native
 M-RoPE prefix/suffix positions, observes the visual-tower forward hook, requires separate nonzero

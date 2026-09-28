@@ -8,6 +8,7 @@ from pathlib import Path
 from multimodal_science.data.manifest import sha256_file
 from multimodal_science.qwen3vl.fusion_smoke import (
     REQUIRED_RUNTIME_PACKAGES,
+    _bind_adapter_training_rows,
     _bounded_training_rows,
     _verify_model_manifest,
     _verify_mrope_insertion,
@@ -27,6 +28,21 @@ class SensorFusionTests(unittest.TestCase):
                 "safetensors": "0.6.2",
             },
         )
+
+    def test_initial_adapter_is_bound_to_exact_fusion_training_rows(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            train_rows = Path(temporary) / "train_qwen.jsonl"
+            train_rows.write_text('{"instruction_id":"one"}\n', encoding="utf-8")
+            metadata = {"source": {"train_rows_sha256": sha256_file(train_rows)}}
+
+            self.assertEqual(
+                _bind_adapter_training_rows(metadata, train_rows),
+                sha256_file(train_rows),
+            )
+
+            metadata["source"]["train_rows_sha256"] = "0" * 64
+            with self.assertRaisesRegex(ValueError, "do not match"):
+                _bind_adapter_training_rows(metadata, train_rows)
 
     def test_bounded_training_rows_rejects_fewer_rows_than_updates(self) -> None:
         with self.assertRaisesRegex(ValueError, "Requested 2 updates"):
@@ -152,6 +168,7 @@ class SensorFusionTests(unittest.TestCase):
         self.assertIn("BIOCODER_TRAIN_INPUT_SCOPE", script)
         self.assertIn("staged_train_artifacts_only", script)
         self.assertIn("BIOCODER_VERIFIED_CODE_REVISION", script)
+        self.assertIn("initial_adapter_training_rows_bound", script)
         self.assertIn("CUBLAS_WORKSPACE_CONFIG=:4096:8", script)
         self.assertIn('cd "$scratch/code/backend"', script)
         self.assertIn("env -i", script)

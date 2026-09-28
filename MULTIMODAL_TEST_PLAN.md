@@ -132,6 +132,8 @@ Status: planned. A requirement is complete only when its linked checks pass with
   batch, rather than decoding and discarding all earlier images again.
 - Adapter inference verifies the training report, artifact manifest, every adapter artifact, exact
   base-model hash, and train-only/frozen-base contracts before PEFT model loading.
+- Fusion initialization additionally requires the adapter's recorded training-row SHA-256 to match
+  the exact `train_qwen.jsonl` artifact joined to XIC signals; equal row counts are insufficient.
 - Adapter CLI identity arguments are all-or-none; smoke-trained adapters remain development-only
   contract evidence even when inference covers every validation prompt.
 - The scheduled `coder` LoRA smoke locks and selects a physical GPU only when both memory and
