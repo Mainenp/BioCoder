@@ -723,6 +723,16 @@ than silently rebuilt by a generic generation wrapper. Validation answers remain
 process and are opened only by the existing answer-separated evaluator after predictions and their
 generation provenance have been persisted.
 
+`qwen3vl/slurm/coder_fusion_evaluate.sbatch` operationalizes that boundary on the RTX 5090 node.
+It stages only prompt-side validation inputs for generation and launches the model under an
+`env -i` child environment that has no instruction-Dataset or answer-key variable. It accepts no
+sample cap, requires all 13,708 bilingual validation prompts, writes an exact artifact manifest,
+and only then invokes the evaluator against the separately hash-bound instruction root. A result is
+accepted for development comparison only when fused runtime provenance, model/adapter/Dataset
+hashes, greedy batch-one decoding, complete prompt coverage, evaluator provenance, and the
+no-internal-test contract all pass. The same validation set remains development-only and must not
+be used as the reward source for later RL or preference optimization.
+
 The formal trainer and fused inference runner have been statically and unit tested but have not yet
 produced an accepted full training/evaluation pair. The next execution gate is a short bounded
 training calibration on one RTX 5090, followed by the uncapped run, a bounded fused-generation

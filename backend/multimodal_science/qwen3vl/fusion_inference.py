@@ -448,6 +448,10 @@ class _FusionTransformersGenerator:
         training = _object(verified.report.get("training"), "fusion training settings")
         attention = training.get("attention_implementation")
         _require(attention in {"sdpa", "eager"}, "Unsupported trained attention implementation")
+        _require(
+            settings.attention_implementation == attention,
+            "Requested attention implementation differs from the trained fusion artifact",
+        )
         base_model = AutoModelForImageTextToText.from_pretrained(
             model_name_or_path,
             revision=model_revision,

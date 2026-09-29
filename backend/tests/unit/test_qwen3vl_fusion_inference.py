@@ -86,6 +86,31 @@ def _make_fusion_adapter(root: Path) -> AdapterSpec:
 
 
 class FusionInferenceContractTests(unittest.TestCase):
+    def test_formal_slurm_evaluation_separates_generation_from_answers(self) -> None:
+        script = (
+            Path(__file__).parents[2]
+            / "multimodal_science/qwen3vl/slurm/coder_fusion_evaluate.sbatch"
+        ).read_text(encoding="utf-8")
+
+        generation_start = script.index("=== RUN ANSWER-ISOLATED FUSED GENERATION ===")
+        answer_start = script.index("=== OPEN ANSWERS ONLY AFTER GENERATION IS IMMUTABLE ===")
+        generation_block = script[generation_start:answer_start]
+        self.assertIn("env -i", generation_block)
+        self.assertIn("run_fusion_inference_cli", generation_block)
+        self.assertNotIn("BIOCODER_INSTRUCTION_ROOT", generation_block)
+        self.assertNotIn("instruction_root", generation_block)
+        self.assertNotIn("validation_answers", generation_block)
+        self.assertNotIn("--max-records", script)
+        self.assertIn('seed" == "17"', script)
+        self.assertIn('max_new_tokens" == "64"', script)
+        self.assertIn('bootstrap_iterations" == "1000"', script)
+        self.assertIn('validation_links = copy_artifact(', script)
+        self.assertNotIn('expected = row["image_sha256"]\nwith prompts.open', script)
+        self.assertIn("evaluate_predictions_cli", script[answer_start:])
+        self.assertIn("FUSION_FULL_GENERATION_CONTRACT=OK", script)
+        self.assertIn("FUSION_FULL_EVALUATION_CONTRACT=OK", script)
+        self.assertIn("QWEN3VL_XIC_FUSION_EVALUATION=OK", script)
+
     def test_completed_fusion_adapter_is_hash_bound_and_accepted(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
