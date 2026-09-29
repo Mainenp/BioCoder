@@ -11,8 +11,11 @@ formal LoRA run completed 3,396 optimizer updates, and its full 13,708-prompt an
 validation evaluation passed the development-evidence contract. A formal
 ChromPeakFormer detector baseline, both
 SequencePeakNet ablations, and a full Qwen3-VL-4B bilingual zero-shot baseline with failure-mode
-audit are verified externally. Cross-family comparison is implemented; internal-test extraction,
-fusion training, replicated seeds, and all sealed benchmark claims remain incomplete.
+audit are verified externally. Cross-family comparison is implemented. The answer-isolated
+image/XIC bundle and a two-update LoRA-plus-projector CUDA smoke have passed their immutable input,
+forward/backward, serialization, and reload contracts. Full fusion training, same-validation
+fusion evaluation, internal-test extraction, replicated seeds, and all sealed benchmark claims
+remain incomplete.
 
 ## Verified Phase A snapshot
 
@@ -151,6 +154,24 @@ The CUDA warning records that SDPA Flash Attention backward is not bitwise deter
 data order, optimizer state, scheduler state, and RNG checkpoints are controlled, but the project
 does not claim bit-exact replay. These two-step runs prove execution and reload contracts only;
 they are not accuracy evidence and remain development-comparison ineligible.
+
+## Verified image/XIC fusion CUDA snapshot
+
+Slurm job `6626` completed the bounded Qwen3-VL-4B image/XIC fusion contract on one RTX 5090 from
+code revision `26d694619c1dddb9907f74604f6e2b1c3a0a8644`. It initialized from the completed image-only
+LoRA adapter, inserted four continuous 1D-projector tokens before the assistant response, retained
+the official visual path and native multimodal RoPE positions, and performed two joint
+LoRA-plus-projector optimizer updates. The recorded losses (`0.994344`, `0.384932`) are execution
+diagnostics, not validation metrics.
+
+The run proved nonzero backward flow, exact parameter-state changes, serialized adapter and
+projector reload, complete model-manifest coverage, staged train-only inputs, and exact binding of
+the adapter and fusion bundle to the same training rows. Its report and output-manifest SHA-256
+values are `0f7ed28ca15e8e5feb511258302fde59bb4abf2b4404364b2ee9b160be2fb99f` and
+`f561296c048e4b1af169dc14ca7d8bb857a0205866f293074a5e0c7fa38f1a67`. The run did not open
+validation answers or internal-test data and remains development-comparison ineligible. Flash
+Attention backward emitted the documented nondeterminism warning, so bit-exact replay is not
+claimed.
 
 The v2 numerical preflight then verified all 16,170 ROI crops across 98 XIC matrices. The unified
 Dataset materializer interpolated each crop on its true RT coordinates to 160 points and atomically

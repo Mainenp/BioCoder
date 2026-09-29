@@ -177,6 +177,13 @@ Status: planned. A requirement is complete only when its linked checks pass with
   that does not expose the original source-root variables, bind
   serialized outputs and the complete base-model file manifest by hash, reload saved weights, and
   remain development-comparison ineligible.
+- The first accepted fusion CUDA evidence is job `6626`: both optimizer updates completed, all
+  forward/backward and exact-manifest gates passed, and the persisted report and manifest hashes
+  are recorded in the roadmap. Its two losses are execution diagnostics only. They cannot be used
+  as accuracy evidence, and the Flash Attention warning forbids a bitwise-determinism claim.
+- Promotion beyond smoke requires a resumable uncapped train-only fusion run followed by complete
+  prompt-only generation and answer-separated evaluation on the same 1,815 validation assets.
+  Neither the bounded run nor its training losses may enter a development comparison table.
 - Every run emits an adapter or checkpoint, configuration snapshot, dataset version, logs, and run metadata.
 - Sequence-only and sequence-plus-metadata runs share the same encoder and heads so that their
   ablation changes exactly one input modality.

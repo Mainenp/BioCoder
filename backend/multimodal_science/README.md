@@ -694,6 +694,14 @@ changed by exact state digests, and reloads the serialized adapter/projector. It
 after its saved manifest and success markers pass, and remains ineligible for development
 comparison.
 
+The first externally verified execution of that contract is Slurm job `6626` at revision
+`26d694619c1dddb9907f74604f6e2b1c3a0a8644`. Its fusion report SHA-256 is
+`0f7ed28ca15e8e5feb511258302fde59bb4abf2b4404364b2ee9b160be2fb99f`, and its exact artifact
+manifest SHA-256 is `f561296c048e4b1af169dc14ca7d8bb857a0205866f293074a5e0c7fa38f1a67`.
+The two optimizer losses are retained only as runtime diagnostics. This run does not establish
+validation quality or completed fusion training; the next required implementation is a resumable
+uncapped trainer followed by complete prompt-only, answer-separated validation evaluation.
+
 The current cluster advertises `Gres=(null)` for its GPU partitions, so Slurm cannot provide a
 GPU TRES reservation for this job. The script records this limitation explicitly and uses a
 user-scoped physical-GPU lock plus three startup samples of memory and utilization. This prevents
