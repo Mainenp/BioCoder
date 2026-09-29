@@ -349,6 +349,15 @@ complete plan coverage, verifies each image/XIC/provenance tuple, exposes the ac
 and preserves `labels=0`, `metrics_allowed=false`, and `benchmark_eligible=false` per asset. It is
 not interchangeable with the supervised COCO index and cannot increase any labeled sample count.
 
+That index gate is now complete: all 77 frames and all 1,610 candidate transitions produced usable
+trace assets, with zero failures, exclusions, or deduplications. The next implemented gate is a
+separate zero-label signal materializer and an augmentation-consistency pretrainer for the XIC
+sensor projector. It binds the complete auxiliary index and output manifest, never opens
+validation or Qwen answer data, and does not load Qwen or its vision tower. A completed projector
+may initialize formal fusion only through report, manifest, architecture-spec, and weight hashes.
+The resulting experiment is an initialization ablation; it cannot be reported as 1,610 additional
+supervised examples or as validation evidence.
+
 ### Phase 8 — Dual-track evaluation
 
 Scientific evaluation:

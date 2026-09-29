@@ -133,6 +133,41 @@ source-group counts against the immutable vendor-import report, bounds the actua
 count by the transition-candidate count, and reports extractor exclusions or Q1/Q3 deduplication
 instead of silently treating candidates as usable training assets.
 
+The accepted September 2026 import contains 4 independent source groups, 77 acquisition frames,
+and 1,610 usable traces from 1,610 candidates, with zero extraction failures or exclusions. These
+are still **zero-label auxiliary inputs**, not an increase to the 14,355 supervised train assets.
+Materialize them for signal-representation pretraining with:
+
+```bash
+python -m multimodal_science.qwen3vl.build_auxiliary_pretraining_data_cli \
+  --auxiliary-index-root "<auxiliary-index-v1>" \
+  --auxiliary-index-report-sha256 "<expected-report-sha256>" \
+  --auxiliary-index-manifest-sha256 "<expected-manifest-sha256>" \
+  --assets-root "<auxiliary-extraction-root>" \
+  --output-dir "<external-run-root>/qwen3vl/auxiliary/datasets/signal-v1"
+```
+
+This step re-verifies every image and XIC hash, crops and resamples the raw RT-coordinate signal to
+160 points, applies the same baseline/log/max normalization as the supervised Dataset, retains
+constant traces with an explicit unavailable flag, and emits no target. The image and XIC are
+recorded as derived views of the same trace; the report explicitly forbids an independence claim.
+
+`qwen3vl/slurm/coder_auxiliary_pretrain.sbatch` then trains only the morphology portion of the XIC
+sensor projector with deterministic paired augmentations and symmetric InfoNCE. The Qwen model,
+vision tower, validation data, and answer keys are not loaded. Training loss is diagnostic only.
+A complete projector can initialize formal fusion by setting all three variables together:
+
+```bash
+export BIOCODER_PRETRAINED_PROJECTOR_ROOT="<complete-auxiliary-run>"
+export BIOCODER_PRETRAINED_PROJECTOR_REPORT_SHA256="<expected-report-sha256>"
+export BIOCODER_PRETRAINED_PROJECTOR_MANIFEST_SHA256="<expected-manifest-sha256>"
+```
+
+The formal fusion launcher stages this artifact into its train-only view and refuses incomplete,
+calibration, schema-drifted, spec-mismatched, or hash-drifted projector weights. The controlled
+ablation must compare the existing random-projector fusion against this auxiliary-initialized
+fusion under the same labeled training rows, validation prompts, seed, and evaluator.
+
 The report records whether the runtime provides NumPy, Pandas, SciPy, Matplotlib, natsort, and
 pyOpenMS. It does not install them. A blocked dependency gate means the plan is valid but
 extraction has not run.

@@ -18,6 +18,9 @@ from typing import Any
 from multimodal_science.chrompeakformer.multimodal_dataset import DATASET_SCHEMA
 from multimodal_science.data.manifest import sha256_file
 from multimodal_science.qwen3vl.fusion_data import SUPPORTED_FUSION_BUNDLE_SCHEMAS
+from multimodal_science.qwen3vl.auxiliary_pretraining import (
+    load_verified_pretrained_projector,
+)
 from multimodal_science.qwen3vl.fusion_smoke import (
     GPU_ALLOCATION_MODE,
     REQUIRED_RUNTIME_PACKAGES,
@@ -385,6 +388,9 @@ def run_fusion_training(
     code_revision: str,
     settings: FusionTrainingSettings,
     resume: bool = False,
+    pretrained_projector_root: Path | None = None,
+    pretrained_projector_report_sha256: str | None = None,
+    pretrained_projector_manifest_sha256: str | None = None,
 ) -> FusionTrainingResult:
     """Train LoRA and an XIC projector without exposing validation supervision."""
 
@@ -398,6 +404,22 @@ def run_fusion_training(
         (code_revision, "code revision", _HEX_40),
     ):
         _require(bool(pattern.fullmatch(value)), f"Invalid {label}")
+    pretraining_values = (
+        pretrained_projector_root,
+        pretrained_projector_report_sha256,
+        pretrained_projector_manifest_sha256,
+    )
+    _require(
+        all(value is None for value in pretraining_values)
+        or all(value is not None for value in pretraining_values),
+        "Pretrained projector root, report hash, and manifest hash must be supplied together",
+    )
+    for value, label in (
+        (pretrained_projector_report_sha256, "pretrained projector report hash"),
+        (pretrained_projector_manifest_sha256, "pretrained projector manifest hash"),
+    ):
+        if value is not None:
+            _require(bool(_HEX_64.fullmatch(value)), f"Invalid {label}")
     _require(
         os.environ.get("BIOCODER_VERIFIED_CODE_REVISION") == code_revision,
         "Code revision was not verified by the immutable launcher",
@@ -444,6 +466,8 @@ def run_fusion_training(
         "model_manifest_sha256": model_manifest_sha256,
         "initial_adapter_report_sha256": initial_adapter.training_report_sha256,
         "initial_adapter_manifest_sha256": initial_adapter.manifest_sha256,
+        "pretrained_projector_report_sha256": pretrained_projector_report_sha256,
+        "pretrained_projector_manifest_sha256": pretrained_projector_manifest_sha256,
         "settings": asdict(settings),
         "train_input_scope": "staged_train_artifacts_only",
         "vision_tower_trainable": False,
@@ -537,6 +561,17 @@ def run_fusion_training(
         )
     projector_spec = SensorProjectorSpec(hidden_size=hidden_size)
     projector = build_sensor_projector(projector_spec).to(device).train()
+    auxiliary_pretraining_metadata: dict[str, Any] | None = None
+    if pretrained_projector_root is not None:
+        projector_weights, auxiliary_pretraining_metadata = (
+            load_verified_pretrained_projector(
+                pretrained_projector_root,
+                report_sha256=str(pretrained_projector_report_sha256),
+                manifest_sha256=str(pretrained_projector_manifest_sha256),
+                expected_spec=projector_spec,
+            )
+        )
+        projector.load_state_dict(load_file(str(projector_weights)), strict=True)
     lora_named_parameters = [
         (name, parameter) for name, parameter in model.named_parameters() if parameter.requires_grad
     ]
@@ -910,6 +945,23 @@ def run_fusion_training(
             "dataset_report_sha256": dataset_report_sha256,
             "adapter_train_rows_sha256": inputs.adapter_train_rows_sha256,
             "initial_adapter": inputs.adapter_metadata,
+            "auxiliary_pretraining": (
+                {
+                    "report_sha256": pretrained_projector_report_sha256,
+                    "manifest_sha256": pretrained_projector_manifest_sha256,
+                    "code_revision": auxiliary_pretraining_metadata.get("code_revision"),
+                    "dataset_report_sha256": _object(
+                        auxiliary_pretraining_metadata.get("sources"),
+                        "auxiliary pretraining sources",
+                    ).get("dataset_report_sha256"),
+                    "projector_sha256": _object(
+                        auxiliary_pretraining_metadata.get("model"),
+                        "auxiliary pretraining model",
+                    ).get("persisted_projector_sha256"),
+                }
+                if auxiliary_pretraining_metadata is not None
+                else None
+            ),
         },
         "model": {
             "name_or_path": model_name_or_path,
@@ -977,6 +1029,7 @@ def run_fusion_training(
             "staged_train_only_input_roots": True,
             "fusion_lora_training_artifacts_bound": True,
             "initial_adapter_training_rows_bound": True,
+            "auxiliary_pretraining_bound": auxiliary_pretraining_metadata is not None,
             "validation_prompts_opened": False,
             "validation_answers_opened": False,
             "internal_test_accessed": False,

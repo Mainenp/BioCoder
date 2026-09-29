@@ -50,9 +50,21 @@ from multimodal_science.qwen3vl.fusion_training import (
     run_fusion_training,
 )
 from multimodal_science.qwen3vl.fusion_inference import run_fusion_inference
+from multimodal_science.qwen3vl.auxiliary_pretraining_data import (
+    AuxiliaryPretrainingDatasetResult,
+    build_auxiliary_pretraining_dataset,
+)
+from multimodal_science.qwen3vl.auxiliary_pretraining import (
+    AuxiliaryPretrainingResult,
+    AuxiliaryPretrainingSettings,
+    run_auxiliary_pretraining,
+)
 
 __all__ = [
     "AdapterSpec",
+    "AuxiliaryPretrainingDatasetResult",
+    "AuxiliaryPretrainingResult",
+    "AuxiliaryPretrainingSettings",
     "InstructionDatasetResult",
     "InferenceBundleResult",
     "LoraBundleResult",
@@ -68,6 +80,7 @@ __all__ = [
     "FusionTrainingSettings",
     "SensorProjectorSpec",
     "build_fusion_bundle",
+    "build_auxiliary_pretraining_dataset",
     "build_inference_bundle",
     "build_instruction_dataset",
     "build_lora_training_bundle",
@@ -80,4 +93,5 @@ __all__ = [
     "insert_sensor_embeddings",
     "run_fusion_training",
     "run_fusion_inference",
+    "run_auxiliary_pretraining",
 ]

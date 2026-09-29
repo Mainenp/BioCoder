@@ -48,6 +48,17 @@ Status: planned. A requirement is complete only when its linked checks pass with
 - The auxiliary index accepts only `channel_driven_inference` plus
   `auxiliary_unlabeled_train`, emits no label or COCO target, fixes metric and benchmark eligibility
   to false, and reports transition traces separately from acquisition frames and source groups.
+- Auxiliary signal materialization must re-verify the complete index manifest, every source matrix
+  and image digest, crop on the physical RT axis, reproduce the supervised signal normalization,
+  and preserve `labels=0`, `metrics_allowed=false`, and `internal_test_accessed=false`.
+- Auxiliary projector pretraining may consume only nonconstant training signals. It must not load
+  Qwen, the vision tower, validation prompts, validation answers, or internal test data. Its loss is
+  not a scientific metric, its output remains comparison-ineligible, and its report must state that
+  ROI images and XIC arrays are derived views rather than independent experimental modalities.
+- Formal fusion may consume an auxiliary-pretrained projector only when the completed pretraining
+  report, exact manifest, projector architecture specification, and weight digest all match. The
+  launcher must stage it inside the existing train-only boundary and record the binding in the
+  formal fusion report.
 
 ### T09-T11 — Leakage prevention
 

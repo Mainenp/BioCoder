@@ -25,6 +25,9 @@ def parser() -> argparse.ArgumentParser:
     command.add_argument("--initial-adapter-root", type=Path, required=True)
     command.add_argument("--initial-adapter-report-sha256", required=True)
     command.add_argument("--initial-adapter-manifest-sha256", required=True)
+    command.add_argument("--pretrained-projector-root", type=Path)
+    command.add_argument("--pretrained-projector-report-sha256")
+    command.add_argument("--pretrained-projector-manifest-sha256")
     command.add_argument("--output-dir", type=Path, required=True)
     command.add_argument("--model-name-or-path", required=True)
     command.add_argument("--model-revision", required=True)
@@ -102,6 +105,13 @@ def main() -> None:
         code_revision=arguments.code_revision,
         settings=settings,
         resume=arguments.resume,
+        pretrained_projector_root=arguments.pretrained_projector_root,
+        pretrained_projector_report_sha256=(
+            arguments.pretrained_projector_report_sha256
+        ),
+        pretrained_projector_manifest_sha256=(
+            arguments.pretrained_projector_manifest_sha256
+        ),
     )
     print(
         json.dumps(

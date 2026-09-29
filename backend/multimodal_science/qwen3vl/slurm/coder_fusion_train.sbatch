@@ -62,6 +62,9 @@ lora_report_sha256="$BIOCODER_LORA_BUNDLE_REPORT_SHA256"
 dataset_report_sha256="$BIOCODER_DATASET_REPORT_SHA256"
 adapter_report_sha256="$BIOCODER_INITIAL_ADAPTER_REPORT_SHA256"
 adapter_manifest_sha256="$BIOCODER_INITIAL_ADAPTER_MANIFEST_SHA256"
+pretrained_projector_source="${BIOCODER_PRETRAINED_PROJECTOR_ROOT:-}"
+pretrained_projector_report_sha256="${BIOCODER_PRETRAINED_PROJECTOR_REPORT_SHA256:-}"
+pretrained_projector_manifest_sha256="${BIOCODER_PRETRAINED_PROJECTOR_MANIFEST_SHA256:-}"
 gpu_index="${BIOCODER_GPU_INDEX:-7}"
 epochs="${BIOCODER_EPOCHS:-1}"
 batch_size="${BIOCODER_BATCH_SIZE:-1}"
@@ -124,6 +127,21 @@ do
     exit 2
   }
 done
+if [[ -n "$pretrained_projector_source" ]]; then
+  for digest in \
+    "$pretrained_projector_report_sha256" \
+    "$pretrained_projector_manifest_sha256"
+  do
+    [[ "$digest" =~ ^[0-9a-f]{64}$ ]] || {
+      echo "Expected a lowercase auxiliary-pretraining SHA-256 digest: $digest" >&2
+      exit 2
+    }
+  done
+  test -d "$pretrained_projector_source"
+else
+  [[ -z "$pretrained_projector_report_sha256" ]]
+  [[ -z "$pretrained_projector_manifest_sha256" ]]
+fi
 [[ "$code_revision" =~ ^[0-9a-f]{40}$ ]]
 test -x "$python_bin"
 test -d "$repo_root/.git"
@@ -165,7 +183,8 @@ verify_training_output() {
     cd "$output"
     sha256sum -c artifact_manifest.sha256
   )
-  "$python_bin" - "$output" "$run_mode" "$code_revision" <<'PY'
+  "$python_bin" - "$output" "$run_mode" "$code_revision" \
+    "${pretrained_projector_source:+true}" <<'PY'
 import json
 import sys
 from pathlib import Path
@@ -179,6 +198,7 @@ def require(condition: bool, message: str) -> None:
 root = Path(sys.argv[1])
 mode = sys.argv[2]
 revision = sys.argv[3]
+uses_auxiliary_pretraining = sys.argv[4] == "true"
 report = json.loads(
     (root / "fusion_training_report.json").read_text(encoding="utf-8")
 )
@@ -206,6 +226,10 @@ for name in (
 require(contracts["validation_prompts_opened"] is False, "Validation prompt leak")
 require(contracts["validation_answers_opened"] is False, "Validation answer leak")
 require(contracts["internal_test_accessed"] is False, "Internal-test leak")
+require(
+    contracts["auxiliary_pretraining_bound"] is uses_auxiliary_pretraining,
+    "Auxiliary-pretraining binding mismatch",
+)
 require(contracts["bitwise_determinism_claimed"] is False, "Bad determinism claim")
 require(
     report["development_training_complete"] is (mode == "full"),
@@ -273,13 +297,16 @@ lora_root="$train_view/lora"
 dataset_root="$train_view/dataset"
 assets_root="$train_view/assets"
 adapter_root="$train_view/initial-adapter"
+pretrained_projector_root="$train_view/auxiliary-pretraining"
 "$python_bin" - \
   "$fusion_source" "$fusion_root" \
   "$lora_source" "$lora_root" \
   "$dataset_source" "$dataset_root" \
   "$assets_source" "$assets_root" \
   "$adapter_source" "$adapter_root" \
-  "$adapter_manifest_sha256" <<'PY'
+  "$adapter_manifest_sha256" \
+  "$pretrained_projector_source" "$pretrained_projector_root" \
+  "$pretrained_projector_manifest_sha256" <<'PY'
 import hashlib
 import json
 import shutil
@@ -348,6 +375,9 @@ dataset_source, dataset_target = map(Path, sys.argv[5:7])
 assets_source, assets_target = map(Path, sys.argv[7:9])
 adapter_source, adapter_target = map(Path, sys.argv[9:11])
 expected_adapter_manifest_sha256 = sys.argv[11]
+pretraining_source_text = sys.argv[12]
+pretraining_target = Path(sys.argv[13])
+expected_pretraining_manifest_sha256 = sys.argv[14]
 for root in (fusion_source, lora_source, dataset_source, assets_source, adapter_source):
     require(root.resolve().is_dir(), f"Missing source root: {root}")
 fusion_source = fusion_source.resolve()
@@ -413,6 +443,26 @@ for line_number, line in enumerate(
     target = copy_file(adapter_source, adapter_target, relative)
     require(digest(target) == expected, f"Initial-adapter hash mismatch: {relative}")
 
+if pretraining_source_text:
+    pretraining_source = Path(pretraining_source_text).resolve()
+    require(pretraining_source.is_dir(), "Missing auxiliary-pretraining source")
+    pretraining_target.mkdir(parents=True, exist_ok=False)
+    pretraining_manifest = pretraining_source / "artifact_manifest.sha256"
+    require(pretraining_manifest.is_file(), "Missing auxiliary-pretraining manifest")
+    require(
+        digest(pretraining_manifest) == expected_pretraining_manifest_sha256,
+        "Auxiliary-pretraining manifest hash mismatch",
+    )
+    shutil.copy2(pretraining_manifest, pretraining_target / pretraining_manifest.name)
+    for line_number, line in enumerate(
+        pretraining_manifest.read_text(encoding="utf-8").splitlines(), 1
+    ):
+        parts = line.split("  ", maxsplit=1)
+        require(len(parts) == 2, f"Malformed pretraining manifest line {line_number}")
+        expected, relative = parts
+        target = copy_file(pretraining_source, pretraining_target, relative)
+        require(digest(target) == expected, f"Auxiliary-pretraining drift: {relative}")
+
 for forbidden in (
     fusion_target / "validation_xic_links.jsonl",
     dataset_target / "validation",
@@ -422,6 +472,7 @@ for forbidden in (
 print(f"LOCAL_TRAIN_IMAGES={len(seen)}")
 print("STAGED_TRAIN_ONLY_INPUT_ROOTS=OK")
 print("STAGED_INITIAL_ADAPTER=OK")
+print(f"STAGED_AUXILIARY_PRETRAINING={'YES' if pretraining_source_text else 'NO'}")
 PY
 
 echo "=== STAGE HASH-VERIFIED MODEL CACHE ==="
@@ -523,6 +574,14 @@ else
   if [[ -n "$max_steps" ]]; then
     limit_arguments+=(--max-steps "$max_steps")
   fi
+  pretrained_projector_arguments=()
+  if [[ -n "$pretrained_projector_source" ]]; then
+    pretrained_projector_arguments+=(
+      --pretrained-projector-root "$pretrained_projector_root"
+      --pretrained-projector-report-sha256 "$pretrained_projector_report_sha256"
+      --pretrained-projector-manifest-sha256 "$pretrained_projector_manifest_sha256"
+    )
+  fi
   mkdir -p "$scratch/tmp" "$scratch/cache"
   for variable in "${!BIOCODER_@}"
   do
@@ -565,6 +624,7 @@ else
         --initial-adapter-root "$adapter_root" \
         --initial-adapter-report-sha256 "$adapter_report_sha256" \
         --initial-adapter-manifest-sha256 "$adapter_manifest_sha256" \
+        "${pretrained_projector_arguments[@]}" \
         --output-dir "$work_output" \
         --model-name-or-path "$local_model" \
         --model-revision "$model_revision" \
