@@ -128,8 +128,10 @@ The indexer rejects partial plans, labels, metric eligibility, validation member
 membership. It verifies every extraction provenance record and output signature, binds each JPEG
 and XIC matrix by hash, and reports the actual number of extracted transition traces and independent
 source groups. It deliberately emits no COCO file or target. The scheduled equivalent is
-`chrompeakformer/slurm/coder_auxiliary_index.sbatch`; it additionally checks the indexed trace,
-frame, and source-group counts against the immutable vendor-import report before publication.
+`chrompeakformer/slurm/coder_auxiliary_index.sbatch`; it additionally checks the frame and
+source-group counts against the immutable vendor-import report, bounds the actual indexed trace
+count by the transition-candidate count, and reports extractor exclusions or Q1/Q3 deduplication
+instead of silently treating candidates as usable training assets.
 
 The report records whether the runtime provides NumPy, Pandas, SciPy, Matplotlib, natsort, and
 pyOpenMS. It does not install them. A blocked dependency gate means the plan is valid but

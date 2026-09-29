@@ -95,8 +95,10 @@ counts = index["counts"]
 contracts = index["contracts"]
 if counts["selected_jobs"] != source_counts["acquisition_frames"]:
     raise SystemExit("Acquisition-frame count drift")
-if counts["extracted_trace_assets"] != source_counts["transition_traces"]:
-    raise SystemExit("Transition-trace count drift")
+transition_candidates = source_counts["transition_traces"]
+extracted_traces = counts["extracted_trace_assets"]
+if extracted_traces <= 0 or extracted_traces > transition_candidates:
+    raise SystemExit("Extracted trace count exceeds its candidate contract")
 if counts["independent_source_groups"] != source_counts["independent_source_groups"]:
     raise SystemExit("Independent-source-group count drift")
 if counts["labels"] != 0 or counts["supervised_train_assets"] != 0:
@@ -105,7 +107,13 @@ if contracts.get("metrics_allowed") is not False:
     raise SystemExit("Auxiliary metrics contract drift")
 if contracts.get("internal_test_accessed") is not False:
     raise SystemExit("Internal-test contract drift")
-print(f"AUXILIARY_INDEXED_TRACES={counts['extracted_trace_assets']}", flush=True)
+print(f"AUXILIARY_TRANSITION_CANDIDATES={transition_candidates}", flush=True)
+print(f"AUXILIARY_INDEXED_TRACES={extracted_traces}", flush=True)
+print(
+    "AUXILIARY_EXCLUDED_OR_DEDUPLICATED_TRACES="
+    f"{transition_candidates - extracted_traces}",
+    flush=True,
+)
 print(f"AUXILIARY_SOURCE_GROUPS={counts['independent_source_groups']}", flush=True)
 print("AUXILIARY_INDEX_CONTRACT=OK", flush=True)
 PY
