@@ -24,6 +24,7 @@ require_env BIOCODER_CODE_REVISION
 require_env BIOCODER_AUXILIARY_ROOT
 require_env BIOCODER_AUXILIARY_REPORT_SHA256
 require_env BIOCODER_CHROMPEAKFORMER_SOURCE_ROOT
+require_env BIOCODER_PRIVATE_SOURCE_SHA256
 
 python_bin="${BIOCODER_CHROMPEAK_PYTHON:-$HOME/miniconda3/envs/biocoder_chrompeak/bin/python}"
 run_root="${BIOCODER_RUN_ROOT:-$HOME/biocoder-work/raw-072fee8e}"
@@ -81,6 +82,11 @@ if missing:
     raise SystemExit(f"Missing extraction dependencies: {missing}")
 print("EXTRACTION_DEPENDENCIES=OK", flush=True)
 PY
+
+echo "=== VERIFY COMPLETE PRIVATE SOURCE ==="
+"$python_bin" -m multimodal_science.chrompeakformer.private_source_preflight_cli \
+  --expected-sha256 "$BIOCODER_PRIVATE_SOURCE_SHA256"
+echo "PRIVATE_SOURCE_IMPORT_CONTRACT=OK"
 
 echo "=== EXECUTE AUXILIARY EXTRACTION ==="
 "$python_bin" -m multimodal_science.chrompeakformer.execute_cli \

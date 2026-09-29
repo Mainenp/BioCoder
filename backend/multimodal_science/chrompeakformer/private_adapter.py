@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import importlib
 import importlib.util
 import math
 import os
@@ -14,7 +15,7 @@ from typing import Any
 
 SOURCE_ROOT_ENV = "CHROMPEAKFORMER_SOURCE_ROOT"
 SMOOTH_SIGMA_ENV = "CHROMPEAKFORMER_SMOOTH_SIGMA"
-ADAPTER_VERSION = "chrompeak-private-adapter-v1"
+ADAPTER_VERSION = "chrompeak-private-adapter-v2"
 SOURCE_API = "extract_xic_with_pyopenms"
 
 PrivateExtractor = Callable[..., Mapping[str, Any] | None]
@@ -43,7 +44,11 @@ def _private_source() -> tuple[Path, Path]:
 
 
 @lru_cache(maxsize=4)
-def _load_private_extractor(module_path_text: str, model_root_text: str) -> PrivateExtractor:
+def _load_private_extractor(
+    module_path_text: str,
+    model_root_text: str,
+    source_sha256: str,
+) -> PrivateExtractor:
     module_path = Path(module_path_text)
     model_root = Path(model_root_text)
     model_root_text = str(model_root)
@@ -51,7 +56,9 @@ def _load_private_extractor(module_path_text: str, model_root_text: str) -> Priv
         sys.path.insert(0, model_root_text)
 
     os.environ.setdefault("MPLBACKEND", "Agg")
-    module_token = hashlib.sha256(str(module_path).encode("utf-8")).hexdigest()[:16]
+    module_token = hashlib.sha256(
+        f"{module_path}\0{source_sha256}".encode("utf-8")
+    ).hexdigest()[:16]
     module_name = f"_biocoder_chrompeak_private_{module_token}"
     specification = importlib.util.spec_from_file_location(module_name, module_path)
     if specification is None or specification.loader is None:
@@ -82,21 +89,78 @@ def _smooth_sigma() -> float:
 
 
 def _source_fingerprint(module_path: Path, model_root: Path) -> str:
-    candidates = (
-        module_path,
-        model_root / "utils" / "mzml_load.py",
-        model_root / "utils" / "mzml_chromatogram_ids.py",
-    )
+    model_root = model_root.resolve()
+    module_path = module_path.resolve()
+    try:
+        module_path.relative_to(model_root)
+    except ValueError as exc:
+        raise ValueError("Private extractor module escapes its model root") from exc
+    candidates = sorted(model_root.rglob("*.py"))
+    if module_path not in {candidate.resolve() for candidate in candidates}:
+        raise FileNotFoundError("Private extractor module is absent from source inventory")
     digest = hashlib.sha256()
-    for path in sorted(candidate for candidate in candidates if candidate.is_file()):
-        relative = path.relative_to(model_root).as_posix()
+    for path in candidates:
+        if path.is_symlink():
+            raise ValueError(f"Private source inventory contains a symbolic link: {path}")
+        if not path.is_file():
+            continue
+        resolved = path.resolve()
+        try:
+            resolved.relative_to(model_root)
+        except ValueError as exc:
+            raise ValueError(f"Private source path escapes model root: {path}") from exc
+        relative = resolved.relative_to(model_root).as_posix()
         digest.update(relative.encode("utf-8"))
         digest.update(b"\0")
-        with path.open("rb") as stream:
+        with resolved.open("rb") as stream:
             for chunk in iter(lambda: stream.read(1024 * 1024), b""):
                 digest.update(chunk)
         digest.update(b"\n")
     return digest.hexdigest()
+
+
+def _evict_external_utils_modules(model_root: Path) -> None:
+    for module_name in tuple(sys.modules):
+        if module_name != "utils" and not module_name.startswith("utils."):
+            continue
+        module = sys.modules.get(module_name)
+        module_file = getattr(module, "__file__", None)
+        if not module_file:
+            sys.modules.pop(module_name, None)
+            continue
+        try:
+            Path(str(module_file)).resolve().relative_to(model_root)
+        except ValueError:
+            sys.modules.pop(module_name, None)
+
+
+def preflight_private_source(expected_sha256: str | None = None) -> dict[str, Any]:
+    """Import and fingerprint every Python file in the configured private model root."""
+
+    module_path, model_root = _private_source()
+    source_sha256 = _source_fingerprint(module_path, model_root)
+    if expected_sha256 is not None and source_sha256 != expected_sha256:
+        raise ValueError(
+            "Private source fingerprint mismatch: "
+            f"expected {expected_sha256}, got {source_sha256}"
+        )
+    _evict_external_utils_modules(model_root)
+    _load_private_extractor(str(module_path), str(model_root), source_sha256)
+    for module_name in ("utils.mzml_load", "utils.mzml_chromatogram_ids"):
+        module = importlib.import_module(module_name)
+        imported_path = Path(str(getattr(module, "__file__", ""))).resolve()
+        try:
+            imported_path.relative_to(model_root)
+        except ValueError as exc:
+            raise ImportError(
+                f"Private runtime module resolved outside model root: {module_name}"
+            ) from exc
+    return {
+        "adapter_version": ADAPTER_VERSION,
+        "source_api": SOURCE_API,
+        "private_code_sha256": source_sha256,
+        "python_source_files": len(list(model_root.rglob("*.py"))),
+    }
 
 
 def _required_text(label: Mapping[str, Any], field: str, index: int) -> str:
@@ -151,7 +215,9 @@ def extract_job(
     labels = _private_labels(job)
     module_path, model_root = _private_source()
     source_sha256 = _source_fingerprint(module_path, model_root)
-    extractor = _load_private_extractor(str(module_path), str(model_root))
+    extractor = _load_private_extractor(
+        str(module_path), str(model_root), source_sha256
+    )
     result = extractor(
         str(source_path),
         str(output_dir),

@@ -109,6 +109,9 @@ After transferring that external output to the Linux host, submit
 `chrompeakformer/slurm/coder_auxiliary_extract.sbatch`. The job stages code, normalized mzML, and
 the authorized private extractor to node-local storage; disables CUDA; verifies all 80 input
 artifact hashes; and publishes results only when all 77 frame jobs finish without a failure record.
+Before extraction it imports the private entrypoint and binds a caller-supplied fingerprint over
+every Python source file beneath the private model root, preventing an undeclared package import
+from escaping provenance or failing only after frame processing begins.
 The persistent extraction output is still unlabeled and must pass a later auxiliary-asset index
 before any self-supervised or weak-supervision objective can consume it.
 

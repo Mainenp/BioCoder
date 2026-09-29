@@ -99,6 +99,9 @@ class AuxiliaryMsdataTests(unittest.TestCase):
         self.assertIn("AUXILIARY_LABELS=0", script)
         self.assertIn("AUXILIARY_METRICS_ALLOWED=false", script)
         self.assertIn("sha256sum -c artifact_manifest.sha256", script)
+        self.assertIn("BIOCODER_PRIVATE_SOURCE_SHA256", script)
+        self.assertIn("private_source_preflight_cli", script)
+        self.assertIn("PRIVATE_SOURCE_IMPORT_CONTRACT=OK", script)
         self.assertNotIn("validation", script.casefold())
         self.assertIn("INTERNAL_TEST_ACCESSED=false", script)
 
