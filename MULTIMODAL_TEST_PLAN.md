@@ -42,6 +42,12 @@ Status: planned. A requirement is complete only when its linked checks pass with
   windows; full-trace point counts cannot be substituted for cropped-window evidence.
 - Nonuniform or clustered acquisition axes are resampled from their RT coordinates, never from
   array-index distance.
+- Vendor-derived auxiliary jobs use a separate all-or-nothing index: each plan job, provenance
+  record, JPEG, and XIC matrix must verify; any missing frame rejects the index rather than creating
+  a partial training population.
+- The auxiliary index accepts only `channel_driven_inference` plus
+  `auxiliary_unlabeled_train`, emits no label or COCO target, fixes metric and benchmark eligibility
+  to false, and reports transition traces separately from acquisition frames and source groups.
 
 ### T09-T11 — Leakage prevention
 

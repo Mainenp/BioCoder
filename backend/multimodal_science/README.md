@@ -112,6 +112,22 @@ artifact hashes; and publishes results only when all 77 frame jobs finish withou
 The persistent extraction output is still unlabeled and must pass a later auxiliary-asset index
 before any self-supervised or weak-supervision objective can consume it.
 
+After all extraction jobs pass, build that separate index with:
+
+```bash
+python -m multimodal_science.chrompeakformer.auxiliary_index_cli \
+  --plan "<auxiliary-import-root>/derivation_plan.jsonl" \
+  --assets-root "<auxiliary-extraction-root>" \
+  --output-dir "<external-run-root>/auxiliary-index-v1"
+```
+
+The indexer rejects partial plans, labels, metric eligibility, validation membership, and benchmark
+membership. It verifies every extraction provenance record and output signature, binds each JPEG
+and XIC matrix by hash, and reports the actual number of extracted transition traces and independent
+source groups. It deliberately emits no COCO file or target. The scheduled equivalent is
+`chrompeakformer/slurm/coder_auxiliary_index.sbatch`; it additionally checks the indexed trace,
+frame, and source-group counts against the immutable vendor-import report before publication.
+
 The report records whether the runtime provides NumPy, Pandas, SciPy, Matplotlib, natsort, and
 pyOpenMS. It does not install them. A blocked dependency gate means the plan is valid but
 extraction has not run.

@@ -344,6 +344,11 @@ plan must pass before use. They do not increase the supervised example count and
 only to a separately reported self-supervised, consistency, or provenance-marked weak-supervision
 stage. Existing validation and sealed internal-test membership remain frozen.
 
+Their extraction products must next pass the dedicated auxiliary asset index. That index requires
+complete plan coverage, verifies each image/XIC/provenance tuple, exposes the actual trace count,
+and preserves `labels=0`, `metrics_allowed=false`, and `benchmark_eligible=false` per asset. It is
+not interchangeable with the supervised COCO index and cannot increase any labeled sample count.
+
 ### Phase 8 — Dual-track evaluation
 
 Scientific evaluation:
