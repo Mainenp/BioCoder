@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -18,6 +19,7 @@ from multimodal_science.qwen3vl.fusion_smoke import (
     _verify_model_manifest,
     _verify_mrope_insertion,
 )
+from multimodal_science.qwen3vl.inference import AdapterSpec
 from multimodal_science.qwen3vl.sensor_fusion import insert_sensor_embeddings
 
 
@@ -36,18 +38,39 @@ class SensorFusionTests(unittest.TestCase):
 
     def test_initial_adapter_is_bound_to_exact_fusion_training_rows(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
-            train_rows = Path(temporary) / "train_qwen.jsonl"
+            root = Path(temporary)
+            train_rows = root / "train_qwen.jsonl"
             train_rows.write_text('{"instruction_id":"one"}\n', encoding="utf-8")
-            metadata = {"source": {"train_rows_sha256": sha256_file(train_rows)}}
+            report_path = root / "lora_training_report.json"
+            report = {
+                "schema_version": "chrompeak-qwen3vl-lora-training-v1",
+                "source": {"train_rows_sha256": sha256_file(train_rows)},
+            }
+            report_path.write_text(json.dumps(report) + "\n", encoding="utf-8")
+            adapter = AdapterSpec(
+                root=root,
+                training_report_sha256=sha256_file(report_path),
+                manifest_sha256="0" * 64,
+            )
 
             self.assertEqual(
-                _bind_adapter_training_rows(metadata, train_rows),
+                _bind_adapter_training_rows(adapter, train_rows),
                 sha256_file(train_rows),
             )
 
-            metadata["source"]["train_rows_sha256"] = "0" * 64
+            stale_report_specification = adapter
+            report["source"]["train_rows_sha256"] = "0" * 64
+            report_path.write_text(json.dumps(report) + "\n", encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "training report hash mismatch"):
+                _bind_adapter_training_rows(stale_report_specification, train_rows)
+
+            adapter = AdapterSpec(
+                root=root,
+                training_report_sha256=sha256_file(report_path),
+                manifest_sha256="0" * 64,
+            )
             with self.assertRaisesRegex(ValueError, "do not match"):
-                _bind_adapter_training_rows(metadata, train_rows)
+                _bind_adapter_training_rows(adapter, train_rows)
 
     def test_fusion_accepts_rebuilt_lora_report_only_when_content_is_identical(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

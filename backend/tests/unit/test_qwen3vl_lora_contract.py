@@ -8,6 +8,10 @@ from pathlib import Path
 
 from multimodal_science.data.manifest import sha256_file
 from multimodal_science.qwen3vl.build_lora_bundle_cli import parser as bundle_parser
+from multimodal_science.qwen3vl.fusion_smoke import (
+    _bind_adapter_training_rows,
+    _verify_and_bind_initial_adapter,
+)
 from multimodal_science.qwen3vl.instruction_data import BILINGUAL_DATASET_SCHEMA
 from multimodal_science.qwen3vl.inference import AdapterSpec, _verify_adapter
 from multimodal_science.qwen3vl.lora_data import (
@@ -122,7 +126,13 @@ def make_instruction_root(root: Path) -> tuple[Path, Path, str]:
     return instruction_root, assets_root, sha256_file(report_path)
 
 
-def make_adapter(root: Path, *, development_complete: bool = True) -> AdapterSpec:
+def make_adapter(
+    root: Path,
+    *,
+    development_complete: bool = True,
+    train_rows_sha256: str = "c" * 64,
+    include_training_source: bool = True,
+) -> AdapterSpec:
     adapter = root / "adapter"
     adapter.mkdir(parents=True)
     (adapter / "adapter_config.json").write_text("{}\n", encoding="utf-8")
@@ -152,6 +162,8 @@ def make_adapter(root: Path, *, development_complete: bool = True) -> AdapterSpe
         "final_benchmark_eligible": False,
         "internal_test_accessed": False,
     }
+    if include_training_source:
+        report["source"] = {"train_rows_sha256": train_rows_sha256}
     report_path = root / "lora_training_report.json"
     write_json(report_path, report)
     artifacts = [
@@ -234,6 +246,89 @@ class Qwen3VlLoraContractTests(unittest.TestCase):
             self.assertTrue(metadata["development_training_complete"])
             self.assertEqual(metadata["training_records"], 128)
             self.assertEqual(metadata["trained_base_name_or_path"], "Qwen/test-model")
+
+    def test_verified_adapter_binds_fusion_training_rows(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            train_rows = root / "lora_bundle" / "train_qwen.jsonl"
+            train_rows.parent.mkdir()
+            train_rows.write_text('{"instruction_id":"one"}\n', encoding="utf-8")
+            expected = sha256_file(train_rows)
+            specification = make_adapter(
+                root / "adapter_run",
+                train_rows_sha256=expected,
+            )
+
+            adapter_dir, metadata, bound_rows_sha256 = (
+                _verify_and_bind_initial_adapter(
+                    specification,
+                    train_rows,
+                    model_name_or_path="/different/local/model-cache",
+                    model_revision="a" * 40,
+                    model_artifact_sha256="b" * 64,
+                )
+            )
+
+            self.assertEqual(adapter_dir, specification.root.resolve() / "adapter")
+            self.assertTrue(metadata["development_training_complete"])
+            self.assertEqual(bound_rows_sha256, expected)
+
+    def test_rejects_incomplete_adapter_at_fusion_binding_seam(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            train_rows = root / "lora_bundle" / "train_qwen.jsonl"
+            train_rows.parent.mkdir()
+            train_rows.write_text('{"instruction_id":"one"}\n', encoding="utf-8")
+            specification = make_adapter(
+                root / "adapter_run",
+                development_complete=False,
+                train_rows_sha256=sha256_file(train_rows),
+            )
+
+            with self.assertRaisesRegex(ValueError, "completed image-only"):
+                _verify_and_bind_initial_adapter(
+                    specification,
+                    train_rows,
+                    model_name_or_path="/different/local/model-cache",
+                    model_revision="a" * 40,
+                    model_artifact_sha256="b" * 64,
+                )
+
+    def test_rejects_adapter_without_training_row_provenance(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            specification = make_adapter(
+                Path(directory),
+                include_training_source=False,
+            )
+
+            _verify_adapter(
+                specification,
+                model_name_or_path="Qwen/test-model",
+                model_revision="a" * 40,
+                model_artifact_sha256="b" * 64,
+            )
+            train_rows = Path(directory) / "train_qwen.jsonl"
+            train_rows.write_text("{}\n", encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "LoRA training source"):
+                _bind_adapter_training_rows(specification, train_rows)
+
+    def test_rejects_malformed_adapter_training_row_digest(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            specification = make_adapter(
+                Path(directory),
+                train_rows_sha256="not-a-sha256",
+            )
+
+            _verify_adapter(
+                specification,
+                model_name_or_path="Qwen/test-model",
+                model_revision="a" * 40,
+                model_artifact_sha256="b" * 64,
+            )
+            train_rows = Path(directory) / "train_qwen.jsonl"
+            train_rows.write_text("{}\n", encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "training-row hash"):
+                _bind_adapter_training_rows(specification, train_rows)
 
     def test_rejects_adapter_artifact_tampering(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

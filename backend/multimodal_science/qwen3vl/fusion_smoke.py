@@ -24,6 +24,7 @@ from multimodal_science.qwen3vl.fusion_data import (
 from multimodal_science.qwen3vl.inference import AdapterSpec, _verify_adapter
 from multimodal_science.qwen3vl.lora_data import LORA_BUNDLE_SCHEMA
 from multimodal_science.qwen3vl.lora_training import (
+    LORA_TRAINING_REPORT_SCHEMA,
     _image_path,
     _messages,
     assistant_supervision_labels,
@@ -92,12 +93,27 @@ def _artifact(root: Path, report: dict[str, Any], key: str) -> Path:
 
 
 def _bind_adapter_training_rows(
-    adapter_metadata: dict[str, Any],
+    initial_adapter: AdapterSpec,
     train_rows_path: Path,
 ) -> str:
     """Require the initial adapter to have trained on the exact fused train rows."""
 
-    source = _object(adapter_metadata.get("source"), "LoRA training source")
+    report_path = initial_adapter.root.resolve() / "lora_training_report.json"
+    _require(
+        bool(_HEX_64.fullmatch(initial_adapter.training_report_sha256)),
+        "Initial adapter training-report SHA-256 is invalid",
+    )
+    _require(
+        report_path.is_file()
+        and sha256_file(report_path) == initial_adapter.training_report_sha256,
+        "Initial adapter training report hash mismatch",
+    )
+    report = _read_json(report_path, "LoRA training report")
+    _require(
+        report.get("schema_version") == LORA_TRAINING_REPORT_SCHEMA,
+        "Unsupported LoRA training report schema",
+    )
+    source = _object(report.get("source"), "LoRA training source")
     expected = source.get("train_rows_sha256")
     _require(
         isinstance(expected, str) and bool(_HEX_64.fullmatch(expected)),
@@ -109,6 +125,33 @@ def _bind_adapter_training_rows(
         "Initial adapter training rows do not match the fusion LoRA bundle",
     )
     return actual
+
+
+def _verify_and_bind_initial_adapter(
+    initial_adapter: AdapterSpec,
+    train_rows_path: Path,
+    *,
+    model_name_or_path: str,
+    model_revision: str,
+    model_artifact_sha256: str,
+) -> tuple[Path, dict[str, Any], str]:
+    """Verify one completed adapter and bind it to the fused training rows."""
+
+    adapter_dir, adapter_metadata = _verify_adapter(
+        initial_adapter,
+        model_name_or_path=model_name_or_path,
+        model_revision=model_revision,
+        model_artifact_sha256=model_artifact_sha256,
+    )
+    _require(
+        adapter_metadata.get("development_training_complete") is True,
+        "Fusion must initialize from the completed image-only LoRA adapter",
+    )
+    adapter_train_rows_sha256 = _bind_adapter_training_rows(
+        initial_adapter,
+        train_rows_path,
+    )
+    return adapter_dir, adapter_metadata, adapter_train_rows_sha256
 
 
 def _bind_fusion_lora_artifacts(
@@ -532,19 +575,14 @@ def run_fusion_smoke(
     )
 
     signals_path = _artifact(data_root, dataset_report, "train_signals")
-    adapter_dir, adapter_metadata = _verify_adapter(
-        initial_adapter,
-        model_name_or_path=model_name_or_path,
-        model_revision=model_revision,
-        model_artifact_sha256=model_artifact_sha256,
-    )
-    _require(
-        adapter_metadata.get("development_training_complete") is True,
-        "Fusion must initialize from the completed image-only LoRA adapter",
-    )
-    adapter_train_rows_sha256 = _bind_adapter_training_rows(
-        adapter_metadata,
-        train_rows_path,
+    adapter_dir, adapter_metadata, adapter_train_rows_sha256 = (
+        _verify_and_bind_initial_adapter(
+            initial_adapter,
+            train_rows_path,
+            model_name_or_path=model_name_or_path,
+            model_revision=model_revision,
+            model_artifact_sha256=model_artifact_sha256,
+        )
     )
 
     try:
