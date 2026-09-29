@@ -184,6 +184,19 @@ Status: planned. A requirement is complete only when its linked checks pass with
 - Promotion beyond smoke requires a resumable uncapped train-only fusion run followed by complete
   prompt-only generation and answer-separated evaluation on the same 1,815 validation assets.
   Neither the bounded run nor its training losses may enter a development comparison table.
+- The formal fusion trainer must default to no `max_steps`, accept only batch size one until padded
+  sensor-token M-RoPE is proven, checkpoint the adapter, projector, optimizer, scheduler, RNG, and
+  exact next-batch position together, and resume from the deterministic unseen sample suffix. A
+  calibration cap must make `development_training_complete=false`; training alone must never make
+  `development_comparison_eligible=true`.
+- The formal Slurm boundary must stage only train link rows, train LoRA rows/selections, train XIC
+  arrays/examples, hash-verified train images, the complete initial-adapter manifest, and the
+  immutable base model. Validation prompts, validation answers, and internal-test paths are not
+  accepted by the training CLI or launcher.
+- Fused validation generation must reject incomplete/calibration adapters, bind the exact formal
+  adapter and projector manifests, align every prompt to one validation XIC row and image digest,
+  use greedy batch-one decoding with explicit three-axis M-RoPE positions, and expose no answer-key
+  or internal-test argument. The answer-separated evaluator remains a downstream process.
 - Every run emits an adapter or checkpoint, configuration snapshot, dataset version, logs, and run metadata.
 - Sequence-only and sequence-plus-metadata runs share the same encoder and heads so that their
   ablation changes exactly one input modality.

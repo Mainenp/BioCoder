@@ -86,6 +86,7 @@ GeneratorFactory = Callable[
     [str, str, GenerationSettings, Path | None],
     BatchGenerator,
 ]
+AdapterVerifier = Callable[..., tuple[Path, dict[str, Any]]]
 
 
 def _require(condition: bool, message: str) -> None:
@@ -628,6 +629,7 @@ def run_qwen_inference(
     max_records: int | None = None,
     resume: bool = False,
     generator_factory: GeneratorFactory | None = None,
+    adapter_verifier: AdapterVerifier | None = None,
 ) -> QwenInferenceResult:
     """Generate predictions without accepting an instruction-root or answer-key path."""
 
@@ -651,7 +653,8 @@ def run_qwen_inference(
     adapter_dir: Path | None = None
     adapter_metadata: dict[str, Any] | None = None
     if adapter is not None:
-        adapter_dir, adapter_metadata = _verify_adapter(
+        verify_adapter = adapter_verifier or _verify_adapter
+        adapter_dir, adapter_metadata = verify_adapter(
             adapter,
             model_name_or_path=model_name_or_path,
             model_revision=model_revision,

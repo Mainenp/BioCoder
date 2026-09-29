@@ -32,6 +32,7 @@ from multimodal_science.qwen3vl.inference_bundle import (
     build_inference_bundle,
 )
 from multimodal_science.qwen3vl.inference import (
+    AdapterSpec,
     GENERATION_REPORT_SCHEMA,
     GenerationSettings,
     PromptRequest,
@@ -594,6 +595,48 @@ class Qwen3VLInferenceRunnerTests(unittest.TestCase):
             self.assertTrue(report["contracts"]["input_is_prompt_only_bundle"])
             self.assertFalse(report["contracts"]["answer_key_available_to_runner"])
             self.assertFalse(report["internal_test_accessed"])
+
+    def test_accepts_a_hash_bound_custom_adapter_verifier(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            bundle, bundle_hash = self._bundle(root)
+            assets = make_validation_assets(root)
+            fake = FakeQwenGenerator()
+            calls = []
+
+            def verifier(specification, **kwargs):
+                calls.append((specification, kwargs))
+                return root / "verified-adapter", {
+                    "kind": "test-fusion",
+                    "development_training_complete": True,
+                }
+
+            result = run_qwen_inference(
+                bundle,
+                assets,
+                root / "run",
+                expected_bundle_report_sha256=bundle_hash,
+                model_name_or_path="Qwen/test-model",
+                model_revision="a" * 40,
+                settings=GenerationSettings(batch_size=1),
+                model_artifact_sha256="b" * 64,
+                adapter=AdapterSpec(
+                    root=root / "fusion",
+                    training_report_sha256="c" * 64,
+                    manifest_sha256="d" * 64,
+                ),
+                max_records=1,
+                generator_factory=lambda *arguments: (
+                    fake
+                    if arguments[-1] == root / "verified-adapter"
+                    else self.fail("Custom adapter path was not forwarded")
+                ),
+                adapter_verifier=verifier,
+            )
+
+            report = json.loads(result.report_path.read_text(encoding="utf-8"))
+            self.assertEqual(len(calls), 1)
+            self.assertEqual(report["model"]["adapter"]["kind"], "test-fusion")
 
     def test_resumes_from_a_verified_prompt_prefix(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

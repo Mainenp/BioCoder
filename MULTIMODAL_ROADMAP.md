@@ -329,6 +329,14 @@ The first fusion sub-gate is an immutable, answer-isolated image/XIC link bundle
 not count as a completed fusion run until sensor tokens are injected into Qwen3-VL and the
 LoRA-plus-projector candidate is trained and evaluated on the same validation assets.
 
+The bounded injection/backpropagation gate is complete. A resumable formal trainer and Slurm
+launcher now exist with an uncapped default, persistent joint checkpoints, deterministic unseen
+suffix recovery, staged train-only roots, and explicit post-training ineligibility. A prompt-only
+fused validation runner also binds the formal adapter/projector, aligns validation XIC rows and
+images, and performs explicit cached greedy decoding with preserved multimodal RoPE positions.
+These paths still require server calibration and a complete formal train/evaluate run; no fusion
+quality claim is permitted before that evidence gate passes.
+
 ### Phase 8 — Dual-track evaluation
 
 Scientific evaluation:

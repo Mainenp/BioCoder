@@ -699,8 +699,34 @@ The first externally verified execution of that contract is Slurm job `6626` at 
 `0f7ed28ca15e8e5feb511258302fde59bb4abf2b4404364b2ee9b160be2fb99f`, and its exact artifact
 manifest SHA-256 is `f561296c048e4b1af169dc14ca7d8bb857a0205866f293074a5e0c7fa38f1a67`.
 The two optimizer losses are retained only as runtime diagnostics. This run does not establish
-validation quality or completed fusion training; the next required implementation is a resumable
-uncapped trainer followed by complete prompt-only, answer-separated validation evaluation.
+validation quality or completed fusion training.
+
+Formal fusion training uses `train_fusion_cli` through
+`qwen3vl/slurm/coder_fusion_train.sbatch`. Its default contract is an uncapped one-epoch pass over
+all 54,335 train instructions with `batch_size=1`, gradient accumulation 16, BF16, frozen base and
+vision weights, trainable language-attention LoRA, and a trainable XIC projector. Batch size one is
+intentional: it avoids padding-dependent M-RoPE ambiguity while continuous sensor tokens are
+inserted into each example. The launcher stages and hash-verifies only train artifacts, all 14,355
+unique train images, the complete initial adapter manifest, and the immutable base-model cache
+before acquiring a GPU. It writes periodic joint adapter/projector/optimizer/scheduler/RNG
+checkpoints into a persistent `.incomplete` run and resumes from the deterministic unseen suffix.
+`BIOCODER_MAX_STEPS` is empty by default; setting it explicitly creates a calibration run that is
+marked incomplete. Training output remains development-comparison ineligible until full
+prompt-only fused generation and answer-separated validation evaluation succeed.
+
+Formal fused validation uses `run_fusion_inference_cli`. It accepts only the prompt-only inference
+bundle, validation XIC links/arrays, hash-verified images, the immutable base model, and a completed
+formal fusion artifact. It rejects calibration adapters. Generation is greedy and batch-one; the
+runner inserts the four projected XIC embeddings after the assistant-generation prefix and uses an
+explicit cached decode loop so Qwen3-VL's three-axis multimodal RoPE positions are preserved rather
+than silently rebuilt by a generic generation wrapper. Validation answers remain outside this
+process and are opened only by the existing answer-separated evaluator after predictions and their
+generation provenance have been persisted.
+
+The formal trainer and fused inference runner have been statically and unit tested but have not yet
+produced an accepted full training/evaluation pair. The next execution gate is a short bounded
+training calibration on one RTX 5090, followed by the uncapped run, a bounded fused-generation
+calibration, and complete same-validation evaluation.
 
 The current cluster advertises `Gres=(null)` for its GPU partitions, so Slurm cannot provide a
 GPU TRES reservation for this job. The script records this limitation explicitly and uses a

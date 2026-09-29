@@ -44,6 +44,12 @@ from multimodal_science.qwen3vl.sensor_projector import (
     build_sensor_projector,
 )
 from multimodal_science.qwen3vl.sensor_fusion import insert_sensor_embeddings
+from multimodal_science.qwen3vl.fusion_training import (
+    FusionTrainingResult,
+    FusionTrainingSettings,
+    run_fusion_training,
+)
+from multimodal_science.qwen3vl.fusion_inference import run_fusion_inference
 
 __all__ = [
     "AdapterSpec",
@@ -58,6 +64,8 @@ __all__ = [
     "GenerationSettings",
     "CrossFamilyComparisonResult",
     "FusionBundleResult",
+    "FusionTrainingResult",
+    "FusionTrainingSettings",
     "SensorProjectorSpec",
     "build_fusion_bundle",
     "build_inference_bundle",
@@ -70,4 +78,6 @@ __all__ = [
     "run_lora_training",
     "build_sensor_projector",
     "insert_sensor_embeddings",
+    "run_fusion_training",
+    "run_fusion_inference",
 ]
