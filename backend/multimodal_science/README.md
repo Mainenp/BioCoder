@@ -105,6 +105,13 @@ normalized into a hash-bound UTF-8 training copy and recorded explicitly. Every 
 `auxiliary_unlabeled_train`, has no metric eligibility, and cannot change validation, benchmark, or
 internal-test membership. The resulting mzML and reports stay outside Git.
 
+After transferring that external output to the Linux host, submit
+`chrompeakformer/slurm/coder_auxiliary_extract.sbatch`. The job stages code, normalized mzML, and
+the authorized private extractor to node-local storage; disables CUDA; verifies all 80 input
+artifact hashes; and publishes results only when all 77 frame jobs finish without a failure record.
+The persistent extraction output is still unlabeled and must pass a later auxiliary-asset index
+before any self-supervised or weak-supervision objective can consume it.
+
 The report records whether the runtime provides NumPy, Pandas, SciPy, Matplotlib, natsort, and
 pyOpenMS. It does not install them. A blocked dependency gate means the plan is valid but
 extraction has not run.

@@ -84,6 +84,24 @@ def fixture(root: Path) -> tuple[Path, Path, Path, Path]:
 
 
 class AuxiliaryMsdataTests(unittest.TestCase):
+    def test_slurm_extractor_is_cpu_only_and_auxiliary_only(self) -> None:
+        script = (
+            Path(__file__).parents[2]
+            / "multimodal_science"
+            / "chrompeakformer"
+            / "slurm"
+            / "coder_auxiliary_extract.sbatch"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("#SBATCH --job-name=coder", script)
+        self.assertIn('export CUDA_VISIBLE_DEVICES=""', script)
+        self.assertIn("--split auxiliary_unlabeled_train", script)
+        self.assertIn("AUXILIARY_LABELS=0", script)
+        self.assertIn("AUXILIARY_METRICS_ALLOWED=false", script)
+        self.assertIn("sha256sum -c artifact_manifest.sha256", script)
+        self.assertNotIn("validation", script.casefold())
+        self.assertIn("INTERNAL_TEST_ACCESSED=false", script)
+
     def test_builds_hash_bound_unlabeled_plan(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

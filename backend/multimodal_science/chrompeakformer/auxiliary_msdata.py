@@ -302,7 +302,7 @@ def build_auxiliary_msdata_dataset(
                 "normalized_invalid_utf8_mzml_files": recovered_mzml_files,
                 "labels": 0,
                 "supervised_train_assets": 0,
-                "auxiliary_unlabeled_train_assets": len(auxiliary_records),
+                "auxiliary_unlabeled_train_frames": len(auxiliary_records),
                 "benchmark_assets": 0,
             },
             "contracts": {
