@@ -151,6 +151,10 @@ This step re-verifies every image and XIC hash, crops and resamples the raw RT-c
 160 points, applies the same baseline/log/max normalization as the supervised Dataset, retains
 constant traces with an explicit unavailable flag, and emits no target. The image and XIC are
 recorded as derived views of the same trace; the report explicitly forbids an independence claim.
+Vendor RT axes are normalized before interpolation by stable sorting and collapsing exact duplicate
+timestamps with a maximum-intensity reducer. Reordered matrices, duplicate counts, and the largest
+backward RT step are retained in the report and surfaced as a warning; an axis with fewer than two
+unique timestamps remains a hard failure.
 
 `qwen3vl/slurm/coder_auxiliary_pretrain.sbatch` then trains only the morphology portion of the XIC
 sensor projector with deterministic paired augmentations and symmetric InfoNCE. The Qwen model,

@@ -14,6 +14,8 @@ from multimodal_science.qwen3vl.auxiliary_pretraining import (
 )
 from multimodal_science.qwen3vl.auxiliary_pretraining_data import (
     AUXILIARY_PRETRAINING_DATASET_SCHEMA,
+    _canonicalize_rt_axis,
+    _canonicalize_signal,
     build_auxiliary_pretraining_dataset,
 )
 from multimodal_science.qwen3vl.sensor_projector import SensorProjectorSpec
@@ -46,13 +48,16 @@ def write_json(path: Path, value: object) -> None:
 
 
 class AuxiliaryPretrainingTests(unittest.TestCase):
-    def fixture(self, root: Path) -> tuple[Path, Path]:
+    def fixture(
+        self, root: Path, matrix_rows: list[list[float]] | None = None
+    ) -> tuple[Path, Path]:
         assets_root = root / "assets"
         matrix = assets_root / "jobs" / "aux" / "xic_matrix.npy"
         matrix.parent.mkdir(parents=True)
         write_npy(
             matrix,
-            [
+            matrix_rows
+            or [
                 [0.0, 1.0, 2.0, 3.0],
                 [0.0, 2.0, 8.0, 0.0],
                 [0.0, 0.0, 0.0, 0.0],
@@ -172,6 +177,96 @@ class AuxiliaryPretrainingTests(unittest.TestCase):
             self.assertFalse(report["contracts"]["metrics_allowed"])
             self.assertFalse(examples[0]["supervision"]["benchmark_eligible"])
             self.assertNotIn("label", examples[0])
+            self.assertEqual(report["warnings"], [])
+            self.assertEqual(
+                report["rt_axis_normalization"]["matrices_already_strict"], 1
+            )
+
+    def test_normalizes_out_of_order_and_duplicate_vendor_rt_points(self) -> None:
+        try:
+            import numpy as np
+        except ImportError:
+            self.skipTest("NumPy is required by the materializer")
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            index_root, assets_root = self.fixture(
+                root,
+                matrix_rows=[
+                    [2.0, 0.0, 1.0, 1.0],
+                    [8.0, 0.0, 2.0, 6.0],
+                    [0.0, 0.0, 0.0, 0.0],
+                ],
+            )
+            report_path = index_root / "auxiliary_asset_index_report.json"
+            manifest = index_root / "artifact_manifest.sha256"
+            result = build_auxiliary_pretraining_dataset(
+                index_root,
+                sha256_file(report_path),
+                sha256_file(manifest),
+                assets_root,
+                root / "output",
+                target_points=160,
+            )
+
+            signals = np.load(result.output_dir / "signals.npy", allow_pickle=False)
+            report = json.loads(result.report_path.read_text(encoding="utf-8"))
+            first_example = json.loads(
+                (result.output_dir / "examples.jsonl")
+                .read_text(encoding="utf-8")
+                .splitlines()[0]
+            )
+
+            self.assertEqual(signals.shape, (2, 160))
+            self.assertTrue(np.isfinite(signals).all())
+            self.assertEqual(report["rt_axis_normalization"]["matrices_normalized"], 1)
+            self.assertEqual(report["rt_axis_normalization"]["matrices_reordered"], 1)
+            self.assertEqual(
+                report["rt_axis_normalization"]["matrices_with_duplicate_rt"], 1
+            )
+            self.assertEqual(
+                report["rt_axis_normalization"]["duplicate_points_collapsed"], 1
+            )
+            self.assertEqual(report["warnings"][0]["code"], "rt_axis_normalized")
+            axis = first_example["signal"]["rt_axis_normalization"]
+            self.assertTrue(axis["was_reordered"])
+            self.assertEqual(axis["duplicate_points_collapsed"], 1)
+            self.assertEqual(
+                report["contracts"]["duplicate_rt_intensity_reducer"], "maximum"
+            )
+            canonical_rt, order, group_starts, _ = _canonicalize_rt_axis(
+                np.asarray([2.0, 0.0, 1.0, 1.0]), np
+            )
+            canonical_signal = _canonicalize_signal(
+                np.asarray([8.0, 0.0, 2.0, 6.0]),
+                order,
+                group_starts,
+                expected_points=4,
+                np=np,
+            )
+            np.testing.assert_array_equal(canonical_rt, [0.0, 1.0, 2.0])
+            np.testing.assert_array_equal(canonical_signal, [0.0, 6.0, 8.0])
+
+    def test_rejects_rt_axis_without_a_real_interval(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            index_root, assets_root = self.fixture(
+                root,
+                matrix_rows=[
+                    [1.0, 1.0, 1.0, 1.0],
+                    [0.0, 2.0, 8.0, 0.0],
+                    [0.0, 0.0, 0.0, 0.0],
+                ],
+            )
+            report_path = index_root / "auxiliary_asset_index_report.json"
+            manifest = index_root / "artifact_manifest.sha256"
+            with self.assertRaisesRegex(ValueError, "fewer than two unique points"):
+                build_auxiliary_pretraining_dataset(
+                    index_root,
+                    sha256_file(report_path),
+                    sha256_file(manifest),
+                    assets_root,
+                    root / "output",
+                )
 
     def test_rejects_source_contract_drift(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

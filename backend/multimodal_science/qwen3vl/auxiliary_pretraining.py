@@ -210,8 +210,14 @@ def run_auxiliary_pretraining(
         ("validation_opened", False),
         ("internal_test_accessed", False),
         ("benchmark_eligible", False),
+        ("rt_axis_normalization_is_explicit", True),
+        ("rt_axes_strictly_increasing_after_normalization", True),
     ):
         _require(contracts.get(name) is expected, f"Auxiliary Dataset contract failed: {name}")
+    _require(
+        contracts.get("duplicate_rt_intensity_reducer") == "maximum",
+        "Auxiliary Dataset contract failed: duplicate_rt_intensity_reducer",
+    )
     _require(report.get("development_training_eligible") is True, "Dataset is not trainable")
     _require(report.get("development_comparison_eligible") is False, "Dataset metrics leak")
 
