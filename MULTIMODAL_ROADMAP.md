@@ -337,6 +337,13 @@ images, and performs explicit cached greedy decoding with preserved multimodal R
 These paths still require server calibration and a complete formal train/evaluate run; no fusion
 quality claim is permitted before that evidence gate passes.
 
+Four additional vendor containers are now admitted only through an auxiliary-unlabeled contract.
+They comprise four independent source groups, 77 converted acquisition frames, and 1,610 transition
+traces. Their exact conversion inventory, normalized mzML hashes, and inference-only extraction
+plan must pass before use. They do not increase the supervised example count and may contribute
+only to a separately reported self-supervised, consistency, or provenance-marked weak-supervision
+stage. Existing validation and sealed internal-test membership remain frozen.
+
 ### Phase 8 — Dual-track evaluation
 
 Scientific evaluation:

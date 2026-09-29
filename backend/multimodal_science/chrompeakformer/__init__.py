@@ -4,6 +4,10 @@ from multimodal_science.chrompeakformer.asset_index import (
     AssetIndexResult,
     build_asset_index,
 )
+from multimodal_science.chrompeakformer.auxiliary_msdata import (
+    AuxiliaryMsdataResult,
+    build_auxiliary_msdata_dataset,
+)
 from multimodal_science.chrompeakformer.executor import (
     ExecutionResult,
     execute_plan,
@@ -41,6 +45,7 @@ from multimodal_science.chrompeakformer.detector_training import (
 
 __all__ = [
     "AssetIndexResult",
+    "AuxiliaryMsdataResult",
     "DetectorDatasetResult",
     "DetectorEvaluationResult",
     "DetectorInferenceResult",
@@ -51,6 +56,7 @@ __all__ = [
     "SequencePreflightResult",
     "TrainingReadinessResult",
     "build_asset_index",
+    "build_auxiliary_msdata_dataset",
     "build_detector_dataset",
     "build_multimodal_dataset",
     "build_training_readiness_report",

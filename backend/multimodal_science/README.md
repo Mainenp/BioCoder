@@ -83,6 +83,28 @@ python -m multimodal_science.data.derive_cli `
   --output-dir "work/chrompeak/derivation/<dataset-version>"
 ```
 
+### Auxiliary vendor-data import
+
+New vendor containers without human peak labels never enter the supervised train, validation, or
+benchmark populations. After an authorized converter has produced one mzML per acquisition frame,
+bind the conversion to its redacted quarantine inventory with:
+
+```bash
+python -m multimodal_science.chrompeakformer.auxiliary_msdata_cli \
+  --quarantine-manifest "<quarantine>/msdata_manifest.jsonl" \
+  --quarantine-report "<quarantine>/msdata_quarantine_report.json" \
+  --converted-root "<converted-msdata-root>" \
+  --converter "<authorized-converter-binary>" \
+  --output-dir "<external-run-root>/auxiliary-msdata"
+```
+
+The importer requires an exact source-group/frame inventory, checks every converted chromatogram
+count against the quarantined transition table, hashes the converter and every mzML, and emits an
+inference-only `derivation_plan.jsonl`. Vendor output containing recoverable non-UTF-8 metadata is
+normalized into a hash-bound UTF-8 training copy and recorded explicitly. Every record is fixed to
+`auxiliary_unlabeled_train`, has no metric eligibility, and cannot change validation, benchmark, or
+internal-test membership. The resulting mzML and reports stay outside Git.
+
 The report records whether the runtime provides NumPy, Pandas, SciPy, Matplotlib, natsort, and
 pyOpenMS. It does not install them. A blocked dependency gate means the plan is valid but
 extraction has not run.
