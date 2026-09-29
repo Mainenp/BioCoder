@@ -11,6 +11,7 @@ from multimodal_science.qwen3vl.fusion_data import build_fusion_bundle
 
 def parser() -> argparse.ArgumentParser:
     command = argparse.ArgumentParser(description=__doc__)
+    command.add_argument("--code-revision", required=True)
     command.add_argument("--dataset-root", type=Path, required=True)
     command.add_argument("--dataset-report-sha256", required=True)
     command.add_argument("--lora-bundle-root", type=Path, required=True)
@@ -24,6 +25,7 @@ def parser() -> argparse.ArgumentParser:
 def main() -> None:
     arguments = parser().parse_args()
     result = build_fusion_bundle(
+        code_revision=arguments.code_revision,
         dataset_root=arguments.dataset_root,
         dataset_report_sha256=arguments.dataset_report_sha256,
         lora_bundle_root=arguments.lora_bundle_root,

@@ -21,6 +21,10 @@ if [[ "$actual_revision" != "$code_revision" ]]; then
   echo "Code revision mismatch: expected=${code_revision} actual=${actual_revision}" >&2
   exit 2
 fi
+[[ -z "$(git -C "$repo_root" status --porcelain --untracked-files=all)" ]] || {
+  echo "Repository must be clean before an immutable fusion-bundle build" >&2
+  exit 3
+}
 
 echo "JOB_ID=${SLURM_JOB_ID:-unscheduled}"
 echo "JOB_NAME=${SLURM_JOB_NAME:-coder}"
@@ -30,6 +34,7 @@ echo "INTERNAL_TEST_ACCESSED=false"
 
 export PYTHONPATH="$repo_root/backend"
 "$python_bin" -m multimodal_science.qwen3vl.build_fusion_bundle_cli \
+  --code-revision "$actual_revision" \
   --dataset-root "$dataset_root" \
   --dataset-report-sha256 "${BIOCODER_DATASET_REPORT_SHA256:?Set BIOCODER_DATASET_REPORT_SHA256}" \
   --lora-bundle-root "$lora_bundle_root" \
@@ -48,14 +53,40 @@ import json
 import sys
 from pathlib import Path
 
+
+def require(condition: bool, message: str) -> None:
+    if not condition:
+        raise RuntimeError(message)
+
+
 report = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
-assert report["counts"]["train_instruction_links"] == 54335
-assert report["counts"]["train_independent_assets"] == 14355
-assert report["counts"]["validation_prompt_links"] == 13708
-assert report["counts"]["validation_independent_assets"] == 1815
-assert report["contracts"]["validation_answer_key_opened"] is False
-assert report["contracts"]["source_group_overlap"] == 0
-assert report["internal_test_accessed"] is False
+require(
+    report["schema_version"] == "chrompeak-qwen3vl-xic-fusion-bundle-v2",
+    "Unexpected fusion bundle schema",
+)
+require(len(report["code_revision"]) == 40, "Bad code revision")
+require(report["counts"]["train_instruction_links"] == 54335, "Bad train link count")
+require(report["counts"]["train_independent_assets"] == 14355, "Bad train asset count")
+require(
+    report["counts"]["validation_prompt_links"] == 13708,
+    "Bad validation link count",
+)
+require(
+    report["counts"]["validation_independent_assets"] == 1815,
+    "Bad validation asset count",
+)
+require(report["contracts"]["validation_answer_key_opened"] is False, "Answers opened")
+require(report["contracts"]["source_group_overlap"] == 0, "Source-group overlap")
+require(
+    report["contracts"]["lora_training_artifacts_content_bound"] is True,
+    "LoRA artifacts are not content-bound",
+)
+require(len(report["sources"]["lora_train_qwen_sha256"]) == 64, "Bad train-row hash")
+require(
+    len(report["sources"]["lora_selection_manifest_sha256"]) == 64,
+    "Bad selection hash",
+)
+require(report["internal_test_accessed"] is False, "Internal test accessed")
 print("FUSION_BUNDLE_CONTRACT=OK")
 PY
 

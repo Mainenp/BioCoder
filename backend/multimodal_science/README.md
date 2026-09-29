@@ -644,27 +644,32 @@ Before training image-plus-XIC fusion, materialize an answer-isolated link bundl
 joins all 54,335 train instructions and 13,708 prompt-only validation rows to the normalized
 160-point XIC arrays while preserving the true independent asset counts (14,355 train and 1,815
 validation). It verifies every source report and array hash, rejects source-group overlap, and
-never opens validation answers. A missing/constant XIC remains a zero-valued sensor input with an
-explicit availability flag; it is not silently dropped.
+never opens validation answers. Fusion bundle v2 also binds the complete `train_qwen.jsonl` and
+`selection_manifest.jsonl` content hashes. This permits a metadata-identical LoRA bundle rebuilt
+at a different time while rejecting any supervision or row-selection drift. The original LoRA
+report hash remains recorded as build provenance. A missing/constant XIC remains a zero-valued
+sensor input with an explicit availability flag; it is not silently dropped.
 
 ```bash
 python -m multimodal_science.qwen3vl.build_fusion_bundle_cli \
+  --code-revision "<40-character-clean-git-revision>" \
   --dataset-root "<multimodal-v1-160>" \
   --dataset-report-sha256 "<dataset-report-digest>" \
   --lora-bundle-root "<formal-lora-bundle>" \
   --lora-bundle-report-sha256 "<lora-bundle-report-digest>" \
   --inference-bundle-root "<prompt-only-inference-bundle>" \
   --inference-bundle-report-sha256 "<inference-bundle-report-digest>" \
-  --output-dir "<external-run-root>/qwen3vl/fusion/bundles/image-xic-v1"
+  --output-dir "<external-run-root>/qwen3vl/fusion/bundles/image-xic-v2"
 ```
 
 On Slurm, set the corresponding `BIOCODER_*` variables and submit
 `qwen3vl/slurm/coder_build_fusion_bundle.sbatch`. This is a one-CPU metadata job and does not
-reserve a GPU. The accompanying trainable sensor projector converts each 160-point XIC into four
-Qwen-width tokens behind a near-closed residual gate. A learned availability embedding preserves
-the distinction between a measured zero trace and a missing XIC. Bundle and projector completion
-alone do not constitute Qwen fusion: the next gate is injection into the Qwen embedding stream
-followed by LoRA-plus-projector training and same-validation evaluation.
+reserve a GPU. It requires a clean repository at the exact declared revision and records that
+revision in the v2 report. The accompanying trainable sensor projector converts each 160-point
+XIC into four Qwen-width tokens behind a near-closed residual gate. A learned availability
+embedding preserves the distinction between a measured zero trace and a missing XIC. Bundle and
+projector completion alone do not constitute Qwen fusion: the next gate is injection into the
+Qwen embedding stream followed by LoRA-plus-projector training and same-validation evaluation.
 
 The bounded fusion smoke inserts four projected XIC embeddings immediately before the assistant
 response without changing Qwen's tokenizer or output vocabulary. The inserted positions are
@@ -678,7 +683,8 @@ its `BIOCODER_*` variables. The job requires and verifies a full-file model mani
 immutable Git archive, local model cache, and train-only input roots containing only the selected
 train rows/images, strips the original source-root variables from the child environment, rejects
 dirty source trees, requires the initial image-only adapter's recorded training-row SHA-256 to
-equal the exact fusion LoRA train file, and fails on drift from the verified
+equal the exact fusion LoRA train file, requires the runtime LoRA train-row and selection hashes
+to equal the complete hashes recorded by fusion bundle v2, and fails on drift from the verified
 NumPy 1.26.4, Torch 2.11.0+cu128, Transformers 4.57.1, PEFT 0.17.1, and safetensors 0.6.2
 runtime. This is an auditable input-scoping control, not a chroot/container security boundary. A
 successful two-update smoke verifies native

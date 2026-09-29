@@ -16,7 +16,11 @@ from typing import Any
 
 from multimodal_science.chrompeakformer.multimodal_dataset import DATASET_SCHEMA
 from multimodal_science.data.manifest import sha256_file
-from multimodal_science.qwen3vl.fusion_data import FUSION_BUNDLE_SCHEMA
+from multimodal_science.qwen3vl.fusion_data import (
+    FUSION_BUNDLE_SCHEMA,
+    LEGACY_FUSION_BUNDLE_SCHEMA,
+    SUPPORTED_FUSION_BUNDLE_SCHEMAS,
+)
 from multimodal_science.qwen3vl.inference import AdapterSpec, _verify_adapter
 from multimodal_science.qwen3vl.lora_data import LORA_BUNDLE_SCHEMA
 from multimodal_science.qwen3vl.lora_training import (
@@ -31,7 +35,7 @@ from multimodal_science.qwen3vl.sensor_projector import (
 )
 
 
-FUSION_SMOKE_SCHEMA = "chrompeak-qwen3vl-xic-fusion-smoke-v1"
+FUSION_SMOKE_SCHEMA = "chrompeak-qwen3vl-xic-fusion-smoke-v2"
 GPU_ALLOCATION_MODE = "manual_physical_index_guard_no_slurm_gres"
 REQUIRED_RUNTIME_PACKAGES = {
     "numpy": "1.26.4",
@@ -105,6 +109,61 @@ def _bind_adapter_training_rows(
         "Initial adapter training rows do not match the fusion LoRA bundle",
     )
     return actual
+
+
+def _bind_fusion_lora_artifacts(
+    fusion_report: dict[str, Any],
+    runtime_lora_bundle_report_sha256: str,
+    train_rows_path: Path,
+    selection_path: Path,
+) -> dict[str, Any]:
+    """Bind runtime LoRA inputs to the complete artifacts used to build fusion links."""
+
+    schema = fusion_report.get("schema_version")
+    _require(schema in SUPPORTED_FUSION_BUNDLE_SCHEMAS, "Bad fusion schema")
+    sources = _object(fusion_report.get("sources"), "fusion sources")
+    build_report_sha256 = sources.get("lora_bundle_report_sha256")
+    _require(
+        isinstance(build_report_sha256, str)
+        and bool(_HEX_64.fullmatch(build_report_sha256)),
+        "Fusion bundle omits a valid build-time LoRA report hash",
+    )
+    report_hash_matches = build_report_sha256 == runtime_lora_bundle_report_sha256
+    train_rows_sha256 = sha256_file(train_rows_path)
+    selection_sha256 = sha256_file(selection_path)
+
+    if schema == LEGACY_FUSION_BUNDLE_SCHEMA:
+        _require(
+            report_hash_matches,
+            "LoRA drift: legacy fusion bundle requires the exact build-time LoRA report; "
+            "rebuild it as v2 to use content-equivalent artifacts",
+        )
+        binding_mode = "legacy_report_sha256"
+    elif schema == FUSION_BUNDLE_SCHEMA:
+        expected_train_rows = sources.get("lora_train_qwen_sha256")
+        expected_selection = sources.get("lora_selection_manifest_sha256")
+        for value, label in (
+            (expected_train_rows, "LoRA train rows"),
+            (expected_selection, "LoRA selection manifest"),
+        ):
+            _require(
+                isinstance(value, str) and bool(_HEX_64.fullmatch(value)),
+                f"Fusion bundle omits a valid {label} hash",
+            )
+        _require(expected_train_rows == train_rows_sha256, "LoRA train-row content drift")
+        _require(expected_selection == selection_sha256, "LoRA selection content drift")
+        binding_mode = "training_artifact_sha256"
+    else:  # pragma: no cover - guarded by SUPPORTED_FUSION_BUNDLE_SCHEMAS
+        raise AssertionError(f"Unhandled fusion schema: {schema}")
+
+    return {
+        "mode": binding_mode,
+        "build_bundle_report_sha256": build_report_sha256,
+        "runtime_bundle_report_sha256": runtime_lora_bundle_report_sha256,
+        "bundle_report_sha256_match": report_hash_matches,
+        "train_qwen_sha256": train_rows_sha256,
+        "selection_manifest_sha256": selection_sha256,
+    }
 
 
 def _write_json(path: Path, payload: dict[str, Any]) -> None:
@@ -344,7 +403,10 @@ def run_fusion_smoke(
     _require(sha256_file(fusion_path) == fusion_bundle_report_sha256, "Fusion hash mismatch")
     _require(sha256_file(lora_path) == lora_bundle_report_sha256, "LoRA hash mismatch")
     _require(sha256_file(dataset_path) == dataset_report_sha256, "Dataset hash mismatch")
-    _require(fusion_report.get("schema_version") == FUSION_BUNDLE_SCHEMA, "Bad fusion schema")
+    _require(
+        fusion_report.get("schema_version") in SUPPORTED_FUSION_BUNDLE_SCHEMAS,
+        "Bad fusion schema",
+    )
     _require(lora_report.get("schema_version") == LORA_BUNDLE_SCHEMA, "Bad LoRA schema")
     _require(dataset_report.get("schema_version") == DATASET_SCHEMA, "Bad Dataset schema")
     _require(dataset_report.get("splits") == ["train", "validation"], "Bad Dataset splits")
@@ -372,7 +434,11 @@ def run_fusion_smoke(
     _require(lora_report.get("final_benchmark_eligible") is False, "Bad LoRA benchmark scope")
     sources = _object(fusion_report.get("sources"), "fusion sources")
     _require(sources.get("dataset_report_sha256") == dataset_report_sha256, "Dataset drift")
-    _require(sources.get("lora_bundle_report_sha256") == lora_bundle_report_sha256, "LoRA drift")
+    lora_source = _object(lora_report.get("source"), "LoRA bundle source")
+    _require(
+        lora_source.get("dataset_report_sha256") == dataset_report_sha256,
+        "Runtime LoRA Dataset drift",
+    )
     _require(fusion_report.get("internal_test_accessed") is False, "Internal test accessed")
     validation_link = _object(
         _object(fusion_report.get("artifacts"), "fusion artifacts").get(
@@ -394,12 +460,17 @@ def run_fusion_smoke(
         "Train-only asset view unexpectedly contains validation images",
     )
 
-    train_links = _read_jsonl(_artifact(fusion_root, fusion_report, "train_xic_links"), "links")
     train_rows_path = _artifact(lora_root, lora_report, "train_qwen")
-    train_rows = _read_jsonl(train_rows_path, "train rows")
-    selections = _read_jsonl(
-        _artifact(lora_root, lora_report, "selection_manifest"), "selection rows"
+    selection_path = _artifact(lora_root, lora_report, "selection_manifest")
+    lora_content_binding = _bind_fusion_lora_artifacts(
+        fusion_report,
+        lora_bundle_report_sha256,
+        train_rows_path,
+        selection_path,
     )
+    train_links = _read_jsonl(_artifact(fusion_root, fusion_report, "train_xic_links"), "links")
+    train_rows = _read_jsonl(train_rows_path, "train rows")
+    selections = _read_jsonl(selection_path, "selection rows")
     _require(
         len(train_links) == len(train_rows) == len(selections),
         "Fusion/train row count mismatch",
@@ -824,6 +895,7 @@ def run_fusion_smoke(
         "sources": {
             "fusion_bundle_report_sha256": fusion_bundle_report_sha256,
             "lora_bundle_report_sha256": lora_bundle_report_sha256,
+            "fusion_lora_content_binding": lora_content_binding,
             "dataset_report_sha256": dataset_report_sha256,
             "adapter_train_rows_sha256": adapter_train_rows_sha256,
             "initial_adapter": adapter_metadata,
@@ -880,6 +952,7 @@ def run_fusion_smoke(
             "reproducibility_seeded": True,
             "bitwise_determinism_claimed": False,
             "staged_train_only_input_roots": True,
+            "fusion_lora_training_artifacts_bound": True,
             "initial_adapter_training_rows_bound": True,
             "validation_answers_opened": False,
             "internal_test_accessed": False,

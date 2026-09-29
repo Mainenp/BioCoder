@@ -163,8 +163,10 @@ Status: planned. A requirement is complete only when its linked checks pass with
   as detector COCO AP.
 - The 1D encoder output is projected into the expected multimodal representation shape.
 - Image/XIC link construction verifies the Dataset, LoRA bundle, and prompt-only bundle hashes;
-  rejects train/validation source-group overlap; preserves unavailable-signal masks; and never
-  opens validation answers.
+  binds the complete LoRA train-row and selection-manifest content hashes; rejects
+  train/validation source-group overlap; preserves unavailable-signal masks; and never opens
+  validation answers. A rebuilt LoRA report is equivalent only when both bound artifacts match;
+  legacy v1 fusion bundles retain exact report-hash identity and must be rebuilt for this path.
 - The sensor projector maps each 160-point signal to four Qwen-width tokens behind a trainable
   near-closed residual gate. Projector-only tests are not evidence of end-to-end Qwen fusion.
 - The fusion CUDA smoke must insert four continuous sensor embeddings before the assistant

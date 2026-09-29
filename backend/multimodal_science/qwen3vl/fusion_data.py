@@ -15,9 +15,15 @@ from multimodal_science.qwen3vl.inference_bundle import BUNDLE_SCHEMA
 from multimodal_science.qwen3vl.lora_data import LORA_BUNDLE_SCHEMA
 
 
-FUSION_BUNDLE_SCHEMA = "chrompeak-qwen3vl-xic-fusion-bundle-v1"
+LEGACY_FUSION_BUNDLE_SCHEMA = "chrompeak-qwen3vl-xic-fusion-bundle-v1"
+FUSION_BUNDLE_SCHEMA = "chrompeak-qwen3vl-xic-fusion-bundle-v2"
+SUPPORTED_FUSION_BUNDLE_SCHEMAS = {
+    LEGACY_FUSION_BUNDLE_SCHEMA,
+    FUSION_BUNDLE_SCHEMA,
+}
 FUSION_LINK_SCHEMA = "chrompeak-qwen3vl-xic-link-v1"
 _HEX_64 = re.compile(r"^[0-9a-f]{64}$")
+_HEX_40 = re.compile(r"^[0-9a-f]{40}$")
 
 
 @dataclass(frozen=True)
@@ -195,6 +201,7 @@ def _signal_link(example: dict[str, Any]) -> dict[str, Any]:
 
 def build_fusion_bundle(
     *,
+    code_revision: str,
     dataset_root: Path,
     dataset_report_sha256: str,
     lora_bundle_root: Path,
@@ -205,6 +212,7 @@ def build_fusion_bundle(
 ) -> FusionBundleResult:
     """Join train instructions and validation prompts to XIC rows without answers."""
 
+    _require(bool(_HEX_40.fullmatch(code_revision)), "Invalid code revision")
     for digest, label in (
         (dataset_report_sha256, "Dataset"),
         (lora_bundle_report_sha256, "LoRA bundle"),
@@ -269,16 +277,30 @@ def build_fusion_bundle(
         "Train/validation source-group leakage",
     )
 
+    train_rows_path, train_rows_artifact = _artifact(
+        lora_bundle_root, lora, "train_qwen", label="LoRA train rows"
+    )
     selection_path, selection_artifact = _artifact(
         lora_bundle_root, lora, "selection_manifest", label="LoRA selection"
     )
     prompt_path, prompt_artifact = _artifact(
         inference_bundle_root, inference, "inference_prompts", label="inference prompts"
     )
+    train_rows = _read_jsonl(train_rows_path, "LoRA train rows")
     selections = _read_jsonl(selection_path, "LoRA selection")
     prompts = _read_jsonl(prompt_path, "inference prompts")
+    _require(
+        train_rows_artifact.get("records") == len(train_rows),
+        "Train row count mismatch",
+    )
     _require(selection_artifact.get("records") == len(selections), "Selection count mismatch")
     _require(prompt_artifact.get("records") == len(prompts), "Prompt count mismatch")
+    _require(len(train_rows) == len(selections), "Train row/selection count mismatch")
+    for row_number, (train_row, selection) in enumerate(zip(train_rows, selections)):
+        _require(
+            train_row.get("image") == selection.get("image"),
+            f"Train row/selection image mismatch: {row_number}",
+        )
     _require(
         len({str(item.get("instruction_id") or "") for item in selections})
         == len(selections),
@@ -339,10 +361,13 @@ def build_fusion_bundle(
         report_path = staging / "fusion_bundle_report.json"
         report = {
             "schema_version": FUSION_BUNDLE_SCHEMA,
+            "code_revision": code_revision,
             "created_at": datetime.now(timezone.utc).isoformat(),
             "sources": {
                 "dataset_report_sha256": dataset_report_sha256,
                 "lora_bundle_report_sha256": lora_bundle_report_sha256,
+                "lora_train_qwen_sha256": train_rows_artifact.get("sha256"),
+                "lora_selection_manifest_sha256": selection_artifact.get("sha256"),
                 "inference_bundle_report_sha256": inference_bundle_report_sha256,
                 "asset_index_sha256": dataset.get("asset_index_sha256"),
             },
@@ -361,6 +386,7 @@ def build_fusion_bundle(
                 "signals_external_to_bundle": True,
                 "source_group_overlap": 0,
                 "language_variants_are_not_independent_assets": True,
+                "lora_training_artifacts_content_bound": True,
                 "internal_test_accessed": False,
             },
             "artifacts": {

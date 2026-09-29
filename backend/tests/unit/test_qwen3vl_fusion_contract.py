@@ -10,7 +10,10 @@ from typing import Any
 import numpy as np
 
 from multimodal_science.data.manifest import sha256_file
-from multimodal_science.qwen3vl.fusion_data import build_fusion_bundle
+from multimodal_science.qwen3vl.fusion_data import (
+    FUSION_BUNDLE_SCHEMA,
+    build_fusion_bundle,
+)
 from multimodal_science.qwen3vl.inference_bundle import BUNDLE_SCHEMA
 from multimodal_science.qwen3vl.lora_data import LORA_BUNDLE_SCHEMA
 from multimodal_science.qwen3vl.sensor_projector import (
@@ -105,6 +108,16 @@ class QwenFusionContractTests(unittest.TestCase):
         inference_root = self.root / "inference"
         lora_root.mkdir()
         inference_root.mkdir()
+        training = lora_root / "train_qwen.jsonl"
+        self.write_jsonl(
+            training,
+            [
+                {
+                    "image": "jobs/train/roi.jpeg",
+                    "conversations": [],
+                }
+            ],
+        )
         selection = lora_root / "selection_manifest.jsonl"
         self.write_jsonl(
             selection,
@@ -127,6 +140,11 @@ class QwenFusionContractTests(unittest.TestCase):
                 "schema_version": LORA_BUNDLE_SCHEMA,
                 "source": {"dataset_report_sha256": dataset_hash},
                 "artifacts": {
+                    "train_qwen": {
+                        "path": training.name,
+                        "sha256": sha256_file(training),
+                        "records": 1,
+                    },
                     "selection_manifest": {
                         "path": selection.name,
                         "sha256": sha256_file(selection),
@@ -177,6 +195,7 @@ class QwenFusionContractTests(unittest.TestCase):
         lora_root, lora_hash, inference_root, inference_hash = self.bundles(dataset_hash)
 
         result = build_fusion_bundle(
+            code_revision="c" * 40,
             dataset_root=dataset_root,
             dataset_report_sha256=dataset_hash,
             lora_bundle_root=lora_root,
@@ -187,9 +206,20 @@ class QwenFusionContractTests(unittest.TestCase):
         )
 
         report = json.loads(result.report_path.read_text(encoding="utf-8"))
+        self.assertEqual(report["schema_version"], FUSION_BUNDLE_SCHEMA)
+        self.assertEqual(report["code_revision"], "c" * 40)
         self.assertEqual(report["counts"]["train_instruction_links"], 1)
         self.assertEqual(report["counts"]["validation_independent_assets"], 1)
         self.assertFalse(report["contracts"]["validation_answer_key_opened"])
+        self.assertTrue(report["contracts"]["lora_training_artifacts_content_bound"])
+        self.assertEqual(
+            report["sources"]["lora_train_qwen_sha256"],
+            sha256_file(lora_root / "train_qwen.jsonl"),
+        )
+        self.assertEqual(
+            report["sources"]["lora_selection_manifest_sha256"],
+            sha256_file(lora_root / "selection_manifest.jsonl"),
+        )
         link = json.loads(result.train_links_path.read_text(encoding="utf-8"))
         self.assertEqual(
             link["signal"],
@@ -215,6 +245,7 @@ class QwenFusionContractTests(unittest.TestCase):
         lora_root, lora_hash, inference_root, inference_hash = self.bundles(dataset_hash)
 
         result = build_fusion_bundle(
+            code_revision="c" * 40,
             dataset_root=dataset_root,
             dataset_report_sha256=dataset_hash,
             lora_bundle_root=lora_root,
@@ -226,6 +257,31 @@ class QwenFusionContractTests(unittest.TestCase):
 
         link = json.loads(result.train_links_path.read_text(encoding="utf-8"))
         self.assertFalse(link["signal"]["available"])
+
+    def test_rejects_train_row_selection_image_drift(self) -> None:
+        dataset_root, dataset_hash = self.dataset()
+        lora_root, _, inference_root, inference_hash = self.bundles(dataset_hash)
+        training_path = lora_root / "train_qwen.jsonl"
+        self.write_jsonl(
+            training_path,
+            [{"image": "jobs/train/different.jpeg", "conversations": []}],
+        )
+        report_path = lora_root / "lora_bundle_report.json"
+        report = json.loads(report_path.read_text(encoding="utf-8"))
+        report["artifacts"]["train_qwen"]["sha256"] = sha256_file(training_path)
+        self.write_json(report_path, report)
+
+        with self.assertRaisesRegex(ValueError, "Train row/selection image mismatch"):
+            build_fusion_bundle(
+                code_revision="c" * 40,
+                dataset_root=dataset_root,
+                dataset_report_sha256=dataset_hash,
+                lora_bundle_root=lora_root,
+                lora_bundle_report_sha256=sha256_file(report_path),
+                inference_bundle_root=inference_root,
+                inference_bundle_report_sha256=inference_hash,
+                output_dir=self.root / "fusion",
+            )
 
     def test_rejects_train_validation_group_leakage(self) -> None:
         dataset_root, _ = self.dataset()
@@ -242,6 +298,7 @@ class QwenFusionContractTests(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, "source-group leakage"):
             build_fusion_bundle(
+                code_revision="c" * 40,
                 dataset_root=dataset_root,
                 dataset_report_sha256=dataset_hash,
                 lora_bundle_root=lora_root,
@@ -274,6 +331,10 @@ class QwenFusionContractTests(unittest.TestCase):
         self.assertAlmostEqual(float(model.gate_logit), -4.0)
 
     def test_slurm_builder_is_cpu_only_answer_isolated_and_hash_bound(self) -> None:
+        from multimodal_science.qwen3vl.build_fusion_bundle_cli import parser
+
+        destinations = {action.dest for action in parser()._actions}
+        self.assertIn("code_revision", destinations)
         script = (
             Path(__file__).parents[2]
             / "multimodal_science"
@@ -288,6 +349,9 @@ class QwenFusionContractTests(unittest.TestCase):
         self.assertIn("BIOCODER_DATASET_REPORT_SHA256", script)
         self.assertIn("BIOCODER_LORA_BUNDLE_REPORT_SHA256", script)
         self.assertIn("BIOCODER_INFERENCE_BUNDLE_REPORT_SHA256", script)
+        self.assertIn("status --porcelain --untracked-files=all", script)
+        self.assertIn('--code-revision "$actual_revision"', script)
+        self.assertIn("lora_training_artifacts_content_bound", script)
         self.assertIn('== 54335', script)
         self.assertIn('== 13708', script)
 

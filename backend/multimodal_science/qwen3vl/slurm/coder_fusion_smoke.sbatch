@@ -303,6 +303,10 @@ def require(condition: bool, message: str) -> None:
 
 
 report = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+require(
+    report["schema_version"] == "chrompeak-qwen3vl-xic-fusion-smoke-v2",
+    "Unexpected fusion smoke schema",
+)
 require(report["training"]["optimizer_updates"] == 2, "Bad optimizer update count")
 require(report["training"]["processed_records"] == 2, "Bad processed-record count")
 require(report["training"]["availability_counts"]["available"] >= 1, "No measured XIC")
@@ -311,6 +315,14 @@ require(state["lora_before"] != state["lora_after"], "LoRA did not update")
 require(state["lora_cleared_before_reload"] != state["lora_after"], "Bad reload control")
 require(state["lora_reloaded"] == state["lora_after"], "LoRA reload mismatch")
 require(state["projector_before"] != state["projector_after"], "Projector did not update")
+binding = report["sources"]["fusion_lora_content_binding"]
+require(binding["mode"] == "training_artifact_sha256", "Bad LoRA binding mode")
+require(len(binding["train_qwen_sha256"]) == 64, "Bad bound train-row hash")
+require(len(binding["selection_manifest_sha256"]) == 64, "Bad bound selection hash")
+require(
+    binding["train_qwen_sha256"] == report["sources"]["adapter_train_rows_sha256"],
+    "Adapter/fusion train-row binding mismatch",
+)
 for contract in (
     "image_and_xic_forward",
     "vision_tower_executed",
@@ -322,6 +334,7 @@ for contract in (
     "projector_reloaded",
     "reproducibility_seeded",
     "staged_train_only_input_roots",
+    "fusion_lora_training_artifacts_bound",
     "initial_adapter_training_rows_bound",
 ):
     require(report["contracts"][contract] is True, f"Contract failed: {contract}")
@@ -341,6 +354,7 @@ require(
     "Train input-scope provenance mismatch",
 )
 print("QWEN3VL_XIC_FORWARD_BACKWARD_CONTRACT=OK")
+print(f"LORA_REPORT_SHA256_MATCH={binding['bundle_report_sha256_match']}")
 PY
 
 verify_exact_manifest() {
