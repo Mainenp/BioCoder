@@ -329,13 +329,13 @@ The first fusion sub-gate is an immutable, answer-isolated image/XIC link bundle
 not count as a completed fusion run until sensor tokens are injected into Qwen3-VL and the
 LoRA-plus-projector candidate is trained and evaluated on the same validation assets.
 
-The bounded injection/backpropagation gate is complete. A resumable formal trainer and Slurm
-launcher now exist with an uncapped default, persistent joint checkpoints, deterministic unseen
-suffix recovery, staged train-only roots, and explicit post-training ineligibility. A prompt-only
-fused validation runner also binds the formal adapter/projector, aligns validation XIC rows and
-images, and performs explicit cached greedy decoding with preserved multimodal RoPE positions.
-These paths still require server calibration and a complete formal train/evaluate run; no fusion
-quality claim is permitted before that evidence gate passes.
+The bounded injection/backpropagation gate, random-initialized formal fusion training, and complete
+same-validation fused evaluation are complete. Aligned, seeded deranged-shuffle, measured-zero,
+and availability-off inference runs have also completed without opening the internal test. Their
+next acceptance gate is a provenance-bound report that recomputes metrics and uses paired
+source-group bootstrap intervals; aggregate prompt-level deltas alone are insufficient. Sensor
+tokens `1/4/8`, learned gate values, and at least three independent training seeds remain required
+before the development protocol can be frozen.
 
 Four additional vendor containers are now admitted only through an auxiliary-unlabeled contract.
 They comprise four independent source groups, 77 converted acquisition frames, and 1,610 transition

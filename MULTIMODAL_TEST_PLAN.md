@@ -218,6 +218,11 @@ Status: planned. A requirement is complete only when its linked checks pass with
   availability-off runs from the same completed adapter. The shuffle operates on independent
   asset rows, has no fixed points, keeps bilingual variants on one donor, and persists its mapping
   hash without consulting answers.
+- The four intervention reports must be joined only after verifying the exact base model, fusion
+  checkpoint, prompt and answer artifacts, decoding settings, intervention seed, and evaluation
+  record identities. Primary uncertainty uses a paired bootstrap over source groups; prompts and
+  language variants are never bootstrap units. Selected metrics are recomputed from the hash-bound
+  evaluation records and checked against every source report before deltas are accepted.
 - Sensor-token ablations are restricted to `1`, `4`, and `8`. Training run identity and reports
   bind the count; auxiliary initialization across counts records source/target counts and the
   adaptive-pooling remap. Every formal training report records initial and final gate probability.

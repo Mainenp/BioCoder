@@ -831,6 +831,17 @@ row-mapping hash, changed-row count, and the fact that no answer key was used. S
 `BIOCODER_XIC_INTERVENTION` and `BIOCODER_XIC_INTERVENTION_SEED` on
 `coder_fusion_evaluate.sbatch`; each intervention receives a distinct locked run name.
 
+Completed intervention runs are analyzed with `analyze_xic_interventions_cli` or
+`qwen3vl/slurm/coder_analyze_xic_interventions.sbatch`. The analyzer refuses path-name-only
+comparisons: every evaluation must bind its supplied generation report, all four generations must
+share the exact base model, fusion checkpoint, prompt/answer artifacts, decoding settings, and
+validation-record identities, and the reported metrics are independently recomputed from the
+hash-bound evaluation records. Confidence intervals use a paired bootstrap over complete source
+groups. They never resample individual prompts, and English/Chinese variants remain paired views
+of the same scientific assets. The report retains raw `aligned - intervention` deltas, a
+direction-adjusted benefit (so lower FPR is correctly treated as better), and the bootstrap
+probability that aligned XIC is better.
+
 `qwen3vl/slurm/coder_fusion_evaluate.sbatch` operationalizes that boundary on the RTX 5090 node.
 It stages only prompt-side validation inputs for generation and launches the model under an
 `env -i` child environment that has no instruction-Dataset or answer-key variable. It accepts no
@@ -841,10 +852,11 @@ hashes, greedy batch-one decoding, complete prompt coverage, evaluator provenanc
 no-internal-test contract all pass. The same validation set remains development-only and must not
 be used as the reward source for later RL or preference optimization.
 
-The formal trainer and fused inference runner have been statically and unit tested but have not yet
-produced an accepted full training/evaluation pair. The next execution gate is a short bounded
-training calibration on one RTX 5090, followed by the uncapped run, a bounded fused-generation
-calibration, and complete same-validation evaluation.
+The random-initialized formal fusion checkpoint and all four aligned/shuffled/zero/availability-off
+validation runs have completed their generation and evaluation contracts without opening the
+internal test. The next gates are the provenance-bound paired intervention report, sensor-token
+counts `1/4/8`, gate-value audit, and three independent training seeds. These remain development
+validation evidence; no final-benchmark claim is permitted yet.
 
 The current cluster advertises `Gres=(null)` for its GPU partitions, so Slurm cannot provide a
 GPU TRES reservation for this job. The script records this limitation explicitly and uses a

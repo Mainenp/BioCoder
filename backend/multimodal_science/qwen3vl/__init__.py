@@ -59,6 +59,11 @@ from multimodal_science.qwen3vl.auxiliary_pretraining import (
     AuxiliaryPretrainingSettings,
     run_auxiliary_pretraining,
 )
+from multimodal_science.qwen3vl.xic_intervention_analysis import (
+    XicInterventionAnalysisResult,
+    XicInterventionRun,
+    analyze_xic_interventions,
+)
 
 __all__ = [
     "AdapterSpec",
@@ -73,6 +78,8 @@ __all__ = [
     "QwenEvaluationResult",
     "QwenInferenceResult",
     "ZeroShotAuditResult",
+    "XicInterventionAnalysisResult",
+    "XicInterventionRun",
     "GenerationSettings",
     "CrossFamilyComparisonResult",
     "FusionBundleResult",
@@ -87,6 +94,7 @@ __all__ = [
     "build_cross_family_development_comparison",
     "evaluate_qwen_predictions",
     "audit_zero_shot_failures",
+    "analyze_xic_interventions",
     "run_qwen_inference",
     "run_lora_training",
     "build_sensor_projector",
