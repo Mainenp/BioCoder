@@ -74,6 +74,7 @@ projector_learning_rate="${BIOCODER_PROJECTOR_LEARNING_RATE:-1e-4}"
 save_steps="${BIOCODER_SAVE_STEPS:-250}"
 log_steps="${BIOCODER_LOG_STEPS:-10}"
 seed="${BIOCODER_SEED:-17}"
+sensor_tokens="${BIOCODER_SENSOR_TOKENS:-4}"
 max_steps="${BIOCODER_MAX_STEPS:-}"
 max_gpu_used_mib="${BIOCODER_MAX_GPU_USED_MIB:-512}"
 max_gpu_utilization="${BIOCODER_MAX_GPU_UTILIZATION:-10}"
@@ -85,7 +86,7 @@ model_short="${model_artifact_sha256:0:16}"
 
 for value in \
   "$epochs" "$batch_size" "$gradient_accumulation_steps" "$save_steps" \
-  "$log_steps" "$seed" "$max_gpu_used_mib" "$max_gpu_utilization" \
+  "$log_steps" "$seed" "$sensor_tokens" "$max_gpu_used_mib" "$max_gpu_utilization" \
   "$min_local_free_gib"
 do
   [[ "$value" =~ ^[0-9]+$ ]] || {
@@ -107,6 +108,10 @@ done
 }
 [[ "$batch_size" == "1" ]] || {
   echo "Fusion training requires BIOCODER_BATCH_SIZE=1" >&2
+  exit 2
+}
+[[ "$sensor_tokens" == "1" || "$sensor_tokens" == "4" || "$sensor_tokens" == "8" ]] || {
+  echo "BIOCODER_SENSOR_TOKENS must be 1, 4, or 8" >&2
   exit 2
 }
 [[ "$gpu_index" == "auto" || "$gpu_index" =~ ^[0-9]+$ ]] || {
@@ -163,7 +168,7 @@ run_mode="full"
 if [[ -n "$max_steps" ]]; then
   run_mode="calibration-steps${max_steps}"
 fi
-run_name="image-xic-${run_mode}-epoch${epochs}-b1-ga${gradient_accumulation_steps}-seed${seed}-${code_short}"
+run_name="image-xic-${run_mode}-tokens${sensor_tokens}-epoch${epochs}-b1-ga${gradient_accumulation_steps}-seed${seed}-${code_short}"
 output_root="${BIOCODER_FUSION_OUTPUT_ROOT:-$run_root/qwen3vl/fusion/runs}"
 work_output="$output_root/.${run_name}.incomplete"
 final_output="$output_root/$run_name"
@@ -184,7 +189,7 @@ verify_training_output() {
     sha256sum -c artifact_manifest.sha256
   )
   "$python_bin" - "$output" "$run_mode" "$code_revision" \
-    "${pretrained_projector_source:+true}" <<'PY'
+    "${pretrained_projector_source:+true}" "$sensor_tokens" <<'PY'
 import json
 import sys
 from pathlib import Path
@@ -199,6 +204,7 @@ root = Path(sys.argv[1])
 mode = sys.argv[2]
 revision = sys.argv[3]
 uses_auxiliary_pretraining = sys.argv[4] == "true"
+sensor_tokens = int(sys.argv[5])
 report = json.loads(
     (root / "fusion_training_report.json").read_text(encoding="utf-8")
 )
@@ -207,6 +213,13 @@ require(
     "Unexpected fusion training schema",
 )
 require(report["code_revision"] == revision, "Code revision mismatch")
+require(
+    report["model"]["sensor_projector"]["sensor_tokens"] == sensor_tokens,
+    "Sensor-token count mismatch",
+)
+gate = report["model"]["sensor_gate"]
+require(gate["initial_probability"] > 0.0, "Invalid initial sensor gate")
+require(gate["final_probability"] > 0.0, "Invalid final sensor gate")
 contracts = report["contracts"]
 for name in (
     "base_weights_frozen",
@@ -263,6 +276,7 @@ echo "GRADIENT_ACCUMULATION_STEPS=$gradient_accumulation_steps"
 echo "EFFECTIVE_BATCH_SIZE=$((batch_size * gradient_accumulation_steps))"
 echo "MAX_STEPS=${max_steps:-none}"
 echo "SAVE_STEPS=$save_steps"
+echo "SENSOR_TOKENS=$sensor_tokens"
 
 if [[ -d "$final_output" ]]; then
   echo "=== VERIFY ALREADY-COMPLETED RUN ==="
@@ -640,6 +654,7 @@ else
         --save-steps "$save_steps" \
         --log-steps "$log_steps" \
         --seed "$seed" \
+        --sensor-tokens "$sensor_tokens" \
         "${limit_arguments[@]}" \
         "${resume_arguments[@]}"
   )
@@ -661,6 +676,8 @@ print("PEAK_CUDA_GIB=", round(report["runtime"]["peak_cuda_memory_bytes"] / 2**3
 print("TRAINING_RECORDS=", report["training"]["training_records"])
 print("OPTIMIZER_UPDATES=", report["training"]["optimizer_updates"])
 print("DEVELOPMENT_TRAINING_COMPLETE=", report["development_training_complete"])
+print("SENSOR_TOKENS=", report["model"]["sensor_projector"]["sensor_tokens"])
+print("SENSOR_GATE=", json.dumps(report["model"]["sensor_gate"], sort_keys=True))
 PY
 echo "FUSION_TRAINING_REPORT_SHA256=$report_sha256"
 echo "ARTIFACT_MANIFEST_SHA256=$manifest_sha256"

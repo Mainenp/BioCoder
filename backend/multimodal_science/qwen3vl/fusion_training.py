@@ -79,6 +79,7 @@ class FusionTrainingSettings:
     attention_implementation: str = "sdpa"
     gradient_checkpointing: bool = True
     deterministic_warn_only: bool = True
+    sensor_tokens: int = 4
 
 
 @dataclass(frozen=True)
@@ -135,6 +136,10 @@ def _validate_settings(settings: FusionTrainingSettings) -> None:
     )
     _require(0.0 <= settings.warmup_ratio < 1.0, "warmup_ratio must be in [0, 1)")
     _require(settings.max_length >= 64, "max_length is too small")
+    _require(
+        settings.sensor_tokens in {1, 4, 8},
+        "sensor_tokens must be one of 1, 4, or 8",
+    )
     _require(
         settings.min_pixels >= 28 * 28 and settings.max_pixels >= settings.min_pixels,
         "Invalid image pixel bounds",
@@ -559,9 +564,13 @@ def run_fusion_training(
             position_token_id != getattr(generation_model.config, token_name),
             f"Position shadow token collides with {token_name}",
         )
-    projector_spec = SensorProjectorSpec(hidden_size=hidden_size)
+    projector_spec = SensorProjectorSpec(
+        hidden_size=hidden_size,
+        sensor_tokens=settings.sensor_tokens,
+    )
     projector = build_sensor_projector(projector_spec).to(device).train()
     auxiliary_pretraining_metadata: dict[str, Any] | None = None
+    auxiliary_source_sensor_tokens: int | None = None
     if pretrained_projector_root is not None:
         projector_weights, auxiliary_pretraining_metadata = (
             load_verified_pretrained_projector(
@@ -572,6 +581,15 @@ def run_fusion_training(
             )
         )
         projector.load_state_dict(load_file(str(projector_weights)), strict=True)
+        auxiliary_source_sensor_tokens = int(
+            _object(
+                _object(
+                    auxiliary_pretraining_metadata.get("model"),
+                    "auxiliary pretraining model",
+                ).get("sensor_projector"),
+                "auxiliary sensor-projector specification",
+            )["sensor_tokens"]
+        )
     lora_named_parameters = [
         (name, parameter) for name, parameter in model.named_parameters() if parameter.requires_grad
     ]
@@ -593,6 +611,10 @@ def run_fusion_training(
     )
     initial_lora_sha256 = _parameter_digest(lora_named_parameters)
     initial_projector_sha256 = _parameter_digest(projector_named_parameters)
+    initial_gate_logit = float(projector.gate_logit.detach().float().cpu())
+    initial_gate_probability = float(
+        projector.gate_logit.detach().float().sigmoid().cpu()
+    )
 
     batches_per_epoch = len(inputs.records)
     updates_per_epoch = math.ceil(
@@ -932,6 +954,10 @@ def run_fusion_training(
     finished_at = datetime.now(timezone.utc)
     adapter_dir = output_dir / "adapter"
     projector_path = output_dir / "sensor_projector.safetensors"
+    final_gate_logit = float(projector.gate_logit.detach().float().cpu())
+    final_gate_probability = float(
+        projector.gate_logit.detach().float().sigmoid().cpu()
+    )
     report = {
         "schema_version": FUSION_TRAINING_REPORT_SCHEMA,
         "code_revision": code_revision,
@@ -958,6 +984,11 @@ def run_fusion_training(
                         auxiliary_pretraining_metadata.get("model"),
                         "auxiliary pretraining model",
                     ).get("persisted_projector_sha256"),
+                    "source_sensor_tokens": auxiliary_source_sensor_tokens,
+                    "target_sensor_tokens": projector_spec.sensor_tokens,
+                    "token_pooling_remapped": (
+                        auxiliary_source_sensor_tokens != projector_spec.sensor_tokens
+                    ),
                 }
                 if auxiliary_pretraining_metadata is not None
                 else None
@@ -971,6 +1002,15 @@ def run_fusion_training(
             "verified_files": inputs.model_inventory["files"],
             "verified_bytes": inputs.model_inventory["bytes"],
             "sensor_projector": projector_spec.as_dict(),
+            "sensor_gate": {
+                "initial_logit": initial_gate_logit,
+                "initial_probability": initial_gate_probability,
+                "final_logit": final_gate_logit,
+                "final_probability": final_gate_probability,
+                "absolute_probability_change": (
+                    final_gate_probability - initial_gate_probability
+                ),
+            },
             "lora_trainable_parameters": sum(value.numel() for value in lora_parameters),
             "projector_trainable_parameters": sum(
                 value.numel() for value in projector_parameters

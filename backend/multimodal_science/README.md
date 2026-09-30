@@ -803,6 +803,15 @@ checkpoints into a persistent `.incomplete` run and resumes from the determinist
 marked incomplete. Training output remains development-comparison ineligible until full
 prompt-only fused generation and answer-separated validation evaluation succeed.
 
+The default projector emits four sensor tokens. Formal token-count ablations set
+`BIOCODER_SENSOR_TOKENS` to exactly `1`, `4`, or `8`; the value is included in the immutable run
+name, training configuration, projector specification, and report. Adaptive average pooling keeps
+the saved convolutional/projector weights shape-compatible across those token counts. When an
+auxiliary-pretrained projector is reused with a different token count, the formal report records
+both source and target counts and marks `token_pooling_remapped=true`. It is therefore an explicit
+pooling ablation rather than an unreported architecture substitution. Every completed training
+report also records the sensor gate's initial/final logits, probabilities, and probability change.
+
 Formal fused validation uses `run_fusion_inference_cli`. It accepts only the prompt-only inference
 bundle, validation XIC links/arrays, hash-verified images, the immutable base model, and a completed
 formal fusion artifact. It rejects calibration adapters. Generation is greedy and batch-one; the
@@ -811,6 +820,16 @@ explicit cached decode loop so Qwen3-VL's three-axis multimodal RoPE positions a
 than silently rebuilt by a generic generation wrapper. Validation answers remain outside this
 process and are opened only by the existing answer-separated evaluator after predictions and their
 generation provenance have been persisted.
+
+For modality-use controls, fused generation accepts exactly four audited XIC interventions:
+`aligned`, `shuffled`, `zero`, and `availability-off`. `shuffled` applies a seeded Sattolo
+single-cycle permutation over independent validation signal rows, so every asset receives another
+asset's XIC with no fixed points and its English/Chinese prompts share the same donor. `zero` keeps
+the original availability embedding while replacing signal values with zero; `availability-off`
+also forces the availability flag false. Runtime provenance records the mode, seed, algorithm,
+row-mapping hash, changed-row count, and the fact that no answer key was used. Set
+`BIOCODER_XIC_INTERVENTION` and `BIOCODER_XIC_INTERVENTION_SEED` on
+`coder_fusion_evaluate.sbatch`; each intervention receives a distinct locked run name.
 
 `qwen3vl/slurm/coder_fusion_evaluate.sbatch` operationalizes that boundary on the RTX 5090 node.
 It stages only prompt-side validation inputs for generation and launches the model under an

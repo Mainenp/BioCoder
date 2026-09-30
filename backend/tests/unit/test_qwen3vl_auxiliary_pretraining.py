@@ -338,6 +338,14 @@ class AuxiliaryPretrainingTests(unittest.TestCase):
             self.assertEqual(path, weights.resolve())
             self.assertTrue(report["development_training_complete"])
 
+            remapped_path, _ = load_verified_pretrained_projector(
+                root,
+                report_sha256=sha256_file(report_path),
+                manifest_sha256=sha256_file(manifest),
+                expected_spec=SensorProjectorSpec(sensor_tokens=8),
+            )
+            self.assertEqual(remapped_path, weights.resolve())
+
             report["development_training_complete"] = False
             write_json(report_path, report)
             manifest.write_text(

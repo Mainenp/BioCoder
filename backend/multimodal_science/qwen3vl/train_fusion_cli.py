@@ -50,6 +50,7 @@ def parser() -> argparse.ArgumentParser:
     command.add_argument("--save-steps", type=int, default=250)
     command.add_argument("--log-steps", type=int, default=10)
     command.add_argument("--seed", type=int, default=17)
+    command.add_argument("--sensor-tokens", type=int, choices=(1, 4, 8), default=4)
     command.add_argument(
         "--attention-implementation",
         choices=("sdpa", "eager"),
@@ -82,6 +83,7 @@ def main() -> None:
         attention_implementation=arguments.attention_implementation,
         gradient_checkpointing=not arguments.no_gradient_checkpointing,
         deterministic_warn_only=not arguments.strict_deterministic,
+        sensor_tokens=arguments.sensor_tokens,
     )
     result = run_fusion_training(
         fusion_bundle_root=arguments.fusion_bundle_root,

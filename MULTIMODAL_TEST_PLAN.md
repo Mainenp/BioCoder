@@ -214,6 +214,13 @@ Status: planned. A requirement is complete only when its linked checks pass with
   adapter and projector manifests, align every prompt to one validation XIC row and image digest,
   use greedy batch-one decoding with explicit three-axis M-RoPE positions, and expose no answer-key
   or internal-test argument. The answer-separated evaluator remains a downstream process.
+- XIC-use evidence must include aligned, seeded deranged-shuffle, measured-zero, and
+  availability-off runs from the same completed adapter. The shuffle operates on independent
+  asset rows, has no fixed points, keeps bilingual variants on one donor, and persists its mapping
+  hash without consulting answers.
+- Sensor-token ablations are restricted to `1`, `4`, and `8`. Training run identity and reports
+  bind the count; auxiliary initialization across counts records source/target counts and the
+  adaptive-pooling remap. Every formal training report records initial and final gate probability.
 - Every run emits an adapter or checkpoint, configuration snapshot, dataset version, logs, and run metadata.
 - Sequence-only and sequence-plus-metadata runs share the same encoder and heads so that their
   ablation changes exactly one input modality.

@@ -6,7 +6,10 @@ import argparse
 import json
 from pathlib import Path
 
-from multimodal_science.qwen3vl.fusion_inference import run_fusion_inference
+from multimodal_science.qwen3vl.fusion_inference import (
+    XIC_INTERVENTIONS,
+    run_fusion_inference,
+)
 from multimodal_science.qwen3vl.inference import AdapterSpec, GenerationSettings
 
 
@@ -35,6 +38,12 @@ def parser() -> argparse.ArgumentParser:
     parser.add_argument("--attention-implementation", choices=("sdpa", "eager"))
     parser.add_argument("--max-records", type=int)
     parser.add_argument("--resume", action="store_true")
+    parser.add_argument(
+        "--xic-intervention",
+        choices=XIC_INTERVENTIONS,
+        default="aligned",
+    )
+    parser.add_argument("--xic-intervention-seed", type=int, default=17)
     return parser
 
 
@@ -70,6 +79,8 @@ def main() -> None:
         ),
         max_records=arguments.max_records,
         resume=arguments.resume,
+        xic_intervention=arguments.xic_intervention,
+        xic_intervention_seed=arguments.xic_intervention_seed,
     )
     print(
         json.dumps(

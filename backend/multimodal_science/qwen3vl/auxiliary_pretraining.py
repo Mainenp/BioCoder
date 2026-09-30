@@ -128,12 +128,12 @@ def _validate_settings(settings: AuxiliaryPretrainingSettings) -> None:
 
 
 def _morphology_tokens(projector: Any, signals: Any, sensor_tokens: int) -> Any:
+    import torch
+
     encoded = projector.encoder(signals.unsqueeze(1))
     points = int(encoded.shape[-1])
-    _require(points % sensor_tokens == 0, "Encoded signal width is not token aligned")
-    pooled = encoded.reshape(
-        encoded.shape[0], encoded.shape[1], sensor_tokens, points // sensor_tokens
-    ).mean(dim=-1)
+    _require(1 <= sensor_tokens <= points, "Invalid morphology token count")
+    pooled = torch.nn.functional.adaptive_avg_pool1d(encoded, sensor_tokens)
     return projector.projector(pooled.transpose(1, 2))
 
 
@@ -492,7 +492,23 @@ def load_verified_pretrained_projector(
     ):
         _require(contracts.get(name) is expected, f"Auxiliary pretraining contract failed: {name}")
     model = _object(report.get("model"), "auxiliary pretraining model")
-    _require(model.get("sensor_projector") == expected_spec.as_dict(), "Projector spec drift")
+    source_spec = _object(
+        model.get("sensor_projector"), "auxiliary sensor-projector specification"
+    )
+    _require(
+        set(source_spec) == {
+            "input_points",
+            "hidden_size",
+            "sensor_tokens",
+            "base_channels",
+            "dropout",
+        },
+        "Unexpected auxiliary sensor-projector fields",
+    )
+    SensorProjectorSpec(**source_spec).validate()
+    expected = expected_spec.as_dict()
+    for field in ("input_points", "hidden_size", "base_channels", "dropout"):
+        _require(source_spec.get(field) == expected[field], f"Projector spec drift: {field}")
     projector_path = root / "sensor_projector.safetensors"
     _require(projector_path.is_file(), "Pretrained projector weights are missing")
     _require(

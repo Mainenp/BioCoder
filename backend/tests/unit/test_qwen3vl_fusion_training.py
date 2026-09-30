@@ -26,6 +26,7 @@ class FusionTrainingContractTests(unittest.TestCase):
         self.assertEqual(settings.attention_implementation, "sdpa")
         self.assertTrue(settings.gradient_checkpointing)
         self.assertTrue(settings.deterministic_warn_only)
+        self.assertEqual(settings.sensor_tokens, 4)
         _validate_settings(settings)
 
     def test_training_rejects_unsafe_or_nonpositive_settings(self) -> None:
@@ -35,6 +36,10 @@ class FusionTrainingContractTests(unittest.TestCase):
             _validate_settings(FusionTrainingSettings(max_steps=0))
         with self.assertRaisesRegex(ValueError, "warmup_ratio"):
             _validate_settings(FusionTrainingSettings(warmup_ratio=1.0))
+        with self.assertRaisesRegex(ValueError, "sensor_tokens"):
+            _validate_settings(FusionTrainingSettings(sensor_tokens=2))
+        for sensor_tokens in (1, 4, 8):
+            _validate_settings(FusionTrainingSettings(sensor_tokens=sensor_tokens))
 
     def test_resume_selects_only_the_highest_well_formed_checkpoint(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -56,6 +61,7 @@ class FusionTrainingContractTests(unittest.TestCase):
 
         self.assertIn("resume", destinations)
         self.assertIn("max_steps", destinations)
+        self.assertIn("sensor_tokens", destinations)
         self.assertNotIn("validation_answers", destinations)
         self.assertNotIn("internal_test", destinations)
 
@@ -93,6 +99,9 @@ class FusionTrainingContractTests(unittest.TestCase):
         self.assertNotIn("--validation-answers", script)
         self.assertNotIn("internal-test", script)
         self.assertIn("QWEN3VL_XIC_FUSION_TRAINING=OK", script)
+        self.assertIn('sensor_tokens="${BIOCODER_SENSOR_TOKENS:-4}"', script)
+        self.assertIn('--sensor-tokens "$sensor_tokens"', script)
+        self.assertIn('tokens${sensor_tokens}', script)
 
 
 if __name__ == "__main__":

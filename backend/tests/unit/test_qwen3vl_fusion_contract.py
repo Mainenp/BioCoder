@@ -330,6 +330,22 @@ class QwenFusionContractTests(unittest.TestCase):
         self.assertFalse(torch.allclose(measured_zero, missing_from_zero))
         self.assertAlmostEqual(float(model.gate_logit), -4.0)
 
+    def test_sensor_projector_supports_one_four_and_eight_token_ablation(self) -> None:
+        for sensor_tokens in (1, 4, 8):
+            SensorProjectorSpec(sensor_tokens=sensor_tokens).validate()
+        if importlib.util.find_spec("torch") is None:
+            self.skipTest("PyTorch is verified in the server training environment")
+        import torch
+
+        signals = torch.linspace(0.0, 1.0, 160).repeat(2, 1)
+        availability = torch.tensor([True, False])
+        for sensor_tokens in (1, 4, 8):
+            projector = build_sensor_projector(
+                SensorProjectorSpec(hidden_size=64, sensor_tokens=sensor_tokens)
+            ).eval()
+            output = projector(signals, availability)
+            self.assertEqual(tuple(output.shape), (2, sensor_tokens, 64))
+
     def test_slurm_builder_is_cpu_only_answer_isolated_and_hash_bound(self) -> None:
         from multimodal_science.qwen3vl.build_fusion_bundle_cli import parser
 

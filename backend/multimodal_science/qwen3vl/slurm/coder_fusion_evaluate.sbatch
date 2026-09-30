@@ -70,6 +70,8 @@ gpu_index="${BIOCODER_GPU_INDEX:-auto}"
 seed="${BIOCODER_SEED:-17}"
 max_new_tokens="${BIOCODER_MAX_NEW_TOKENS:-64}"
 bootstrap_iterations="${BIOCODER_BOOTSTRAP_ITERATIONS:-1000}"
+xic_intervention="${BIOCODER_XIC_INTERVENTION:-aligned}"
+xic_intervention_seed="${BIOCODER_XIC_INTERVENTION_SEED:-17}"
 max_gpu_used_mib="${BIOCODER_MAX_GPU_USED_MIB:-512}"
 max_gpu_utilization="${BIOCODER_MAX_GPU_UTILIZATION:-10}"
 min_local_free_gib="${BIOCODER_MIN_LOCAL_FREE_GIB:-32}"
@@ -80,7 +82,7 @@ adapter_short="${adapter_report_sha256:0:12}"
 model_short="${model_artifact_sha256:0:16}"
 
 for value in \
-  "$seed" "$max_new_tokens" "$bootstrap_iterations" "$max_gpu_used_mib" \
+  "$seed" "$max_new_tokens" "$bootstrap_iterations" "$xic_intervention_seed" "$max_gpu_used_mib" \
   "$max_gpu_utilization" "$min_local_free_gib"
 do
   [[ "$value" =~ ^[0-9]+$ ]] || {
@@ -89,6 +91,10 @@ do
   }
 done
 (( max_new_tokens >= 1 && bootstrap_iterations >= 2 ))
+case "$xic_intervention" in
+  aligned|shuffled|zero|availability-off) ;;
+  *) echo "Unsupported BIOCODER_XIC_INTERVENTION: $xic_intervention" >&2; exit 2 ;;
+esac
 [[ "$seed" == "17" && "$max_new_tokens" == "64" && "$bootstrap_iterations" == "1000" ]] || {
   echo "Formal fusion evaluation is frozen at seed=17, max_new_tokens=64, bootstrap_iterations=1000" >&2
   exit 2
@@ -126,7 +132,7 @@ actual_revision="$(git -C "$repo_root" rev-parse HEAD)"
   exit 3
 }
 
-run_name="image-xic-validation-${adapter_short}-${code_short}"
+run_name="image-xic-${xic_intervention}-iseed${xic_intervention_seed}-validation-${adapter_short}-${code_short}"
 generation_root="$run_root/qwen3vl/fusion/generations"
 evaluation_root="$run_root/qwen3vl/fusion/evaluations"
 generation_final="$generation_root/$run_name"
@@ -151,6 +157,8 @@ echo "GENERATION_RUN_NAME=$run_name"
 echo "GENERATION_BATCH_SIZE=1"
 echo "MAX_NEW_TOKENS=$max_new_tokens"
 echo "BOOTSTRAP_ITERATIONS=$bootstrap_iterations"
+echo "XIC_INTERVENTION=$xic_intervention"
+echo "XIC_INTERVENTION_SEED=$xic_intervention_seed"
 echo "GENERATION_ANSWER_KEY_AVAILABLE=false"
 echo "INTERNAL_TEST_ACCESSED=false"
 
@@ -462,6 +470,8 @@ if [[ ! -d "$generation_final" ]]; then
         --dtype bfloat16 \
         --device-map single_cuda \
         --attention-implementation sdpa \
+        --xic-intervention "$xic_intervention" \
+        --xic-intervention-seed "$xic_intervention_seed" \
         "${resume_arguments[@]}"
   )
 fi
@@ -496,7 +506,8 @@ evaluation_report_sha256="$(sha256sum "$evaluation_final/qwen_evaluation_report.
   "$adapter_report_sha256" "$adapter_manifest_sha256" \
   "$model_artifact_sha256" "$inference_report_sha256" \
   "$instruction_report_sha256" "$fusion_report_sha256" \
-  "$dataset_report_sha256" "$seed" "$max_new_tokens" "$bootstrap_iterations" <<'PY'
+  "$dataset_report_sha256" "$seed" "$max_new_tokens" "$bootstrap_iterations" \
+  "$xic_intervention" "$xic_intervention_seed" <<'PY'
 import hashlib
 import json
 import sys
@@ -511,6 +522,8 @@ evaluation = json.loads(evaluation_path.read_text(encoding="utf-8"))
     instruction_report, fusion_report, dataset_report,
 ) = sys.argv[3:10]
 seed, max_tokens, bootstrap = map(int, sys.argv[10:13])
+xic_intervention = sys.argv[13]
+xic_intervention_seed = int(sys.argv[14])
 
 assert generation["counts"]["predictions"] == 13708
 assert generation["scope"]["complete_prompt_coverage"] is True
@@ -522,11 +535,17 @@ assert generation["runtime"]["manual_cached_greedy_decode"] is True
 assert generation["runtime"]["explicit_fused_mrope_positions"] is True
 assert generation["runtime"]["fusion_bundle_report_sha256"] == fusion_report
 assert generation["runtime"]["dataset_report_sha256"] == dataset_report
+intervention = generation["runtime"]["xic_intervention"]
+assert intervention["mode"] == xic_intervention
+assert intervention["seed"] == xic_intervention_seed
+assert intervention["answer_key_used"] is False
+assert intervention["language_variants_share_one_asset_intervention"] is True
 adapter = generation["model"]["adapter"]
 assert adapter["kind"] == "image_xic_fusion"
 assert adapter["training_report_sha256"] == adapter_report
 assert adapter["manifest_sha256"] == adapter_manifest
 assert adapter["development_training_complete"] is True
+assert adapter["xic_intervention"] == intervention
 assert generation["model"]["artifact_sha256"] == model_artifact
 assert generation["source"]["bundle_report_sha256"] == inference_report
 assert generation["source"]["instruction_report_sha256"] == instruction_report

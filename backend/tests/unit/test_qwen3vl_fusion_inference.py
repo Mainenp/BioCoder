@@ -8,6 +8,7 @@ from pathlib import Path
 from multimodal_science.data.manifest import sha256_file
 from multimodal_science.qwen3vl.fusion_inference import (
     _FusionAdapterVerifier,
+    _build_xic_intervention_plan,
     _eos_token_ids,
 )
 from multimodal_science.qwen3vl.fusion_training import FUSION_TRAINING_REPORT_SCHEMA
@@ -86,6 +87,16 @@ def _make_fusion_adapter(root: Path) -> AdapterSpec:
 
 
 class FusionInferenceContractTests(unittest.TestCase):
+    @staticmethod
+    def intervention_links() -> dict[str, dict[str, object]]:
+        return {
+            f"instruction-{row}-{language}": {
+                "signal": {"row": row, "available": row != 2},
+            }
+            for row in range(6)
+            for language in ("en", "zh-CN")
+        }
+
     def test_formal_slurm_evaluation_separates_generation_from_answers(self) -> None:
         script = (
             Path(__file__).parents[2]
@@ -110,6 +121,40 @@ class FusionInferenceContractTests(unittest.TestCase):
         self.assertIn("FUSION_FULL_GENERATION_CONTRACT=OK", script)
         self.assertIn("FUSION_FULL_EVALUATION_CONTRACT=OK", script)
         self.assertIn("QWEN3VL_XIC_FUSION_EVALUATION=OK", script)
+        self.assertIn("BIOCODER_XIC_INTERVENTION", script)
+        self.assertIn('--xic-intervention "$xic_intervention"', script)
+
+    def test_shuffled_xic_is_seeded_deranged_and_asset_stable(self) -> None:
+        links = self.intervention_links()
+
+        first = _build_xic_intervention_plan(links, mode="shuffled", seed=29)
+        second = _build_xic_intervention_plan(links, mode="shuffled", seed=29)
+
+        self.assertEqual(first.row_mapping, second.row_mapping)
+        self.assertEqual(first.metadata, second.metadata)
+        self.assertEqual(set(first.row_mapping), set(first.row_mapping.values()))
+        self.assertTrue(
+            all(source != donor for source, donor in first.row_mapping.items())
+        )
+        self.assertEqual(first.metadata["changed_signal_rows"], 6)
+        self.assertFalse(first.metadata["answer_key_used"])
+        self.assertTrue(
+            first.metadata["language_variants_share_one_asset_intervention"]
+        )
+
+    def test_zero_and_availability_off_are_distinct_interventions(self) -> None:
+        links = self.intervention_links()
+
+        zero = _build_xic_intervention_plan(links, mode="zero", seed=17)
+        unavailable = _build_xic_intervention_plan(
+            links, mode="availability-off", seed=17
+        )
+
+        self.assertTrue(zero.metadata["signal_values_zeroed"])
+        self.assertFalse(zero.metadata["availability_forced_off"])
+        self.assertTrue(unavailable.metadata["signal_values_zeroed"])
+        self.assertTrue(unavailable.metadata["availability_forced_off"])
+        self.assertEqual(zero.row_mapping, unavailable.row_mapping)
 
     def test_completed_fusion_adapter_is_hash_bound_and_accepted(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -175,6 +220,8 @@ class FusionInferenceContractTests(unittest.TestCase):
         )
 
         self.assertEqual(arguments.max_new_tokens, 64)
+        self.assertEqual(arguments.xic_intervention, "aligned")
+        self.assertEqual(arguments.xic_intervention_seed, 17)
         self.assertNotIn("batch_size", destinations)
         self.assertNotIn("do_sample", destinations)
         self.assertNotIn("answer", destinations)

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import random
 import re
@@ -36,6 +37,7 @@ from multimodal_science.qwen3vl.sensor_projector import (
 
 
 FUSION_GENERATOR_BACKEND = "transformers-qwen3vl-image-xic"
+XIC_INTERVENTIONS = ("aligned", "shuffled", "zero", "availability-off")
 _HEX_40_TO_64 = re.compile(r"^[0-9a-f]{40,64}$")
 _HEX_64 = re.compile(r"^[0-9a-f]{64}$")
 
@@ -59,6 +61,15 @@ class _ValidationInputs:
     fusion_report_sha256: str
     dataset_report_sha256: str
     validation_links_sha256: str
+
+
+@dataclass(frozen=True)
+class _XicInterventionPlan:
+    mode: str
+    seed: int
+    row_mapping: dict[int, int]
+    availability_by_row: dict[int, bool]
+    metadata: dict[str, Any]
 
 
 def _object(value: Any, label: str) -> dict[str, Any]:
@@ -164,8 +175,14 @@ def _projector_spec(value: Any) -> SensorProjectorSpec:
 
 
 class _FusionAdapterVerifier:
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        xic_intervention: dict[str, Any] | None = None,
+    ) -> None:
         self.verified: _VerifiedFusionAdapter | None = None
+        self._xic_intervention = (
+            dict(xic_intervention) if xic_intervention is not None else None
+        )
 
     def __call__(
         self,
@@ -280,6 +297,7 @@ class _FusionAdapterVerifier:
             "fusion_bundle_report_sha256": _object(
                 report.get("sources"), "fusion sources"
             ).get("fusion_bundle_report_sha256"),
+            "xic_intervention": self._xic_intervention,
         }
         self.verified = _VerifiedFusionAdapter(
             root=root,
@@ -401,6 +419,76 @@ def _load_validation_inputs(
     )
 
 
+def _build_xic_intervention_plan(
+    links_by_instruction_id: dict[str, dict[str, Any]],
+    *,
+    mode: str,
+    seed: int,
+) -> _XicInterventionPlan:
+    """Build an answer-independent, asset-stable XIC intervention plan."""
+
+    _require(mode in XIC_INTERVENTIONS, f"Unsupported XIC intervention: {mode}")
+    _require(isinstance(seed, int) and seed >= 0, "XIC intervention seed is invalid")
+    availability_by_row: dict[int, bool] = {}
+    for link in links_by_instruction_id.values():
+        signal = _object(link.get("signal"), "validation signal link")
+        row = signal.get("row")
+        available = signal.get("available")
+        _require(isinstance(row, int) and row >= 0, "Bad intervention signal row")
+        _require(isinstance(available, bool), "Bad intervention availability")
+        previous = availability_by_row.setdefault(row, available)
+        _require(previous is available, "Availability differs across one validation asset")
+
+    rows = sorted(availability_by_row)
+    _require(rows, "XIC intervention has no validation rows")
+    row_mapping = dict(zip(rows, rows))
+    algorithm = "identity-v1"
+    if mode == "shuffled":
+        _require(len(rows) >= 2, "Shuffled XIC requires at least two validation assets")
+        donors = list(rows)
+        generator = random.Random(seed)
+        for index in range(len(donors) - 1, 0, -1):
+            other = generator.randrange(index)
+            donors[index], donors[other] = donors[other], donors[index]
+        _require(
+            all(source != donor for source, donor in zip(rows, donors)),
+            "Shuffled XIC permutation has a fixed point",
+        )
+        row_mapping = dict(zip(rows, donors))
+        algorithm = "seeded-sattolo-single-cycle-v1"
+
+    mapping_payload = [
+        {"source_row": source, "donor_row": row_mapping[source]}
+        for source in rows
+    ]
+    mapping_sha256 = hashlib.sha256(
+        json.dumps(
+            mapping_payload,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+    metadata = {
+        "mode": mode,
+        "seed": seed,
+        "algorithm": algorithm,
+        "mapping_sha256": mapping_sha256,
+        "unique_signal_rows": len(rows),
+        "changed_signal_rows": sum(row_mapping[row] != row for row in rows),
+        "signal_values_zeroed": mode in {"zero", "availability-off"},
+        "availability_forced_off": mode == "availability-off",
+        "language_variants_share_one_asset_intervention": True,
+        "answer_key_used": False,
+    }
+    return _XicInterventionPlan(
+        mode=mode,
+        seed=seed,
+        row_mapping=row_mapping,
+        availability_by_row=availability_by_row,
+        metadata=metadata,
+    )
+
+
 def _eos_token_ids(value: Any) -> set[int]:
     if isinstance(value, int) and not isinstance(value, bool):
         return {value}
@@ -419,6 +507,7 @@ class _FusionTransformersGenerator:
         settings: GenerationSettings,
         verified: _VerifiedFusionAdapter,
         validation: _ValidationInputs,
+        intervention: _XicInterventionPlan,
     ) -> None:
         _require(settings.batch_size == 1, "Fusion inference requires batch_size=1")
         _require(not settings.do_sample, "Fusion development evaluation requires greedy decoding")
@@ -499,6 +588,7 @@ class _FusionTransformersGenerator:
             "Validation signals violate the normalized [0, 1] contract",
         )
         self._links = validation.links_by_instruction_id
+        self._intervention = intervention
         self._verified_images: dict[str, str] = {}
         self._torch = torch
         self._np = np
@@ -531,6 +621,13 @@ class _FusionTransformersGenerator:
             "dataset_report_sha256": validation.dataset_report_sha256,
             "validation_links_sha256": validation.validation_links_sha256,
             "sensor_projector": verified.projector_spec.as_dict(),
+            "sensor_gate": {
+                "logit": float(self._projector.gate_logit.detach().float().cpu()),
+                "probability": float(
+                    self._projector.gate_logit.detach().float().sigmoid().cpu()
+                ),
+            },
+            "xic_intervention": dict(intervention.metadata),
         }
 
     @property
@@ -566,12 +663,22 @@ class _FusionTransformersGenerator:
         )
         input_ids = encoded["input_ids"].to(self._device)
         signal_link = _object(link.get("signal"), "validation signal")
-        signal_row = int(signal_link["row"])
+        source_signal_row = int(signal_link["row"])
+        signal_row = self._intervention.row_mapping[source_signal_row]
         signal = torch.from_numpy(
             self._np.array(self._signals[signal_row], copy=True)
         ).unsqueeze(0).to(device=self._device, dtype=torch.float32)
+        source_available = self._intervention.availability_by_row[source_signal_row]
+        signal_available = source_available
+        if self._intervention.mode == "shuffled":
+            signal_available = self._intervention.availability_by_row[signal_row]
+        elif self._intervention.mode == "zero":
+            signal.zero_()
+        elif self._intervention.mode == "availability-off":
+            signal.zero_()
+            signal_available = False
         availability = torch.tensor(
-            [signal_link["available"]], dtype=torch.bool, device=self._device
+            [signal_available], dtype=torch.bool, device=self._device
         )
         labels = torch.full_like(input_ids, -100)
         with torch.inference_mode(), torch.autocast(device_type="cuda", dtype=torch.bfloat16):
@@ -654,6 +761,8 @@ def run_fusion_inference(
     settings: GenerationSettings = GenerationSettings(),
     max_records: int | None = None,
     resume: bool = False,
+    xic_intervention: str = "aligned",
+    xic_intervention_seed: int = 17,
 ) -> QwenInferenceResult:
     """Generate prompt-only validation predictions from image plus XIC inputs."""
 
@@ -667,7 +776,12 @@ def run_fusion_inference(
         inference_bundle_root=inference_bundle_root,
         inference_bundle_report_sha256=inference_bundle_report_sha256,
     )
-    verifier = _FusionAdapterVerifier()
+    intervention = _build_xic_intervention_plan(
+        validation.links_by_instruction_id,
+        mode=xic_intervention,
+        seed=xic_intervention_seed,
+    )
+    verifier = _FusionAdapterVerifier(intervention.metadata)
 
     def generator_factory(
         runtime_model_name_or_path: str,
@@ -683,6 +797,7 @@ def run_fusion_inference(
             runtime_settings,
             verifier.verified,
             validation,
+            intervention,
         )
 
     return run_qwen_inference(

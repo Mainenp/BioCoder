@@ -22,8 +22,8 @@ class SensorProjectorSpec:
         if self.sensor_tokens < 1:
             raise ValueError("sensor_tokens must be positive")
         encoded_points = self.input_points // 8
-        if encoded_points % self.sensor_tokens:
-            raise ValueError("Encoded points must divide evenly into sensor tokens")
+        if self.sensor_tokens > encoded_points:
+            raise ValueError("sensor_tokens cannot exceed the encoded signal width")
         if self.base_channels < 8:
             raise ValueError("base_channels must be at least eight")
         if not 0.0 <= self.dropout < 1.0:
@@ -114,11 +114,9 @@ def build_sensor_projector(spec: SensorProjectorSpec) -> Any:
             availability = availability.to(device=signals.device, dtype=torch.bool)
             signals = signals * availability.unsqueeze(1).to(dtype=signals.dtype)
             encoded = self.encoder(signals.unsqueeze(1))
-            points = int(encoded.shape[-1])
-            width = points // spec.sensor_tokens
-            pooled = encoded.reshape(
-                encoded.shape[0], encoded.shape[1], spec.sensor_tokens, width
-            ).mean(dim=-1)
+            pooled = torch.nn.functional.adaptive_avg_pool1d(
+                encoded, spec.sensor_tokens
+            )
             tokens = self.projector(pooled.transpose(1, 2))
             availability_tokens = self.availability_embedding(availability.long())
             tokens = tokens + availability_tokens.unsqueeze(1).to(dtype=tokens.dtype)
