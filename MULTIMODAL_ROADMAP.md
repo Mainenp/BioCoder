@@ -337,6 +337,10 @@ source-group bootstrap intervals; aggregate prompt-level deltas alone are insuff
 tokens `1/4/8`, learned gate values, and at least three independent training seeds remain required
 before the development protocol can be frozen.
 
+The formal reproducibility matrix is fixed in code as four-token random-projector fusion at seeds
+`17/29/43`, plus one- and eight-token seed-17 pooling ablations. It is throttled to two concurrent
+Slurm entries and keeps auxiliary initialization as a separate experiment.
+
 Four additional vendor containers are now admitted only through an auxiliary-unlabeled contract.
 They comprise four independent source groups, 77 converted acquisition frames, and 1,610 transition
 traces. Their exact conversion inventory, normalized mzML hashes, and inference-only extraction

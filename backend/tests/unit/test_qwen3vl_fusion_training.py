@@ -103,6 +103,31 @@ class FusionTrainingContractTests(unittest.TestCase):
         self.assertIn('--sensor-tokens "$sensor_tokens"', script)
         self.assertIn('tokens${sensor_tokens}', script)
 
+    def test_development_matrix_has_three_primary_seeds_and_token_ablations(self) -> None:
+        script = (
+            Path(__file__).parents[2]
+            / "multimodal_science"
+            / "qwen3vl"
+            / "slurm"
+            / "coder_fusion_development_matrix.sbatch"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("#SBATCH --job-name=coder", script)
+        self.assertIn("#SBATCH --array=0-4%2", script)
+        for configuration in (
+            "sensor_tokens=4; training_seed=17",
+            "sensor_tokens=4; training_seed=29",
+            "sensor_tokens=4; training_seed=43",
+            "sensor_tokens=1; training_seed=17",
+            "sensor_tokens=8; training_seed=17",
+        ):
+            self.assertIn(configuration, script)
+        self.assertIn('export BIOCODER_MAX_STEPS=""', script)
+        self.assertIn("unset BIOCODER_PRETRAINED_PROJECTOR_ROOT", script)
+        self.assertIn("INITIALIZATION=random", script)
+        self.assertIn("INTERNAL_TEST_ACCESSED=false", script)
+        self.assertIn('exec bash "$training_script"', script)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -226,6 +226,9 @@ Status: planned. A requirement is complete only when its linked checks pass with
 - Sensor-token ablations are restricted to `1`, `4`, and `8`. Training run identity and reports
   bind the count; auxiliary initialization across counts records source/target counts and the
   adaptive-pooling remap. Every formal training report records initial and final gate probability.
+- The reproducibility matrix uses random projector initialization for every row, trains the
+  four-token primary at seeds `17/29/43`, and changes only token count for the one- and eight-token
+  seed-17 rows. Its Slurm array is capped at two concurrent entries and forbids sample/step caps.
 - Every run emits an adapter or checkpoint, configuration snapshot, dataset version, logs, and run metadata.
 - Sequence-only and sequence-plus-metadata runs share the same encoder and heads so that their
   ablation changes exactly one input modality.

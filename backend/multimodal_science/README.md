@@ -858,6 +858,12 @@ internal test. The next gates are the provenance-bound paired intervention repor
 counts `1/4/8`, gate-value audit, and three independent training seeds. These remain development
 validation evidence; no final-benchmark claim is permitted yet.
 
+`qwen3vl/slurm/coder_fusion_development_matrix.sbatch` fixes that remaining training matrix. Its
+five array entries run the primary four-token configuration at seeds `17/29/43` and the one- and
+eight-token pooling variants at seed `17`. The array is throttled to two concurrent entries,
+forbids step caps, explicitly removes auxiliary-projector initialization, and delegates to the
+same resumable, hash-bound formal trainer. Auxiliary initialization remains a separate ablation.
+
 The current cluster advertises `Gres=(null)` for its GPU partitions, so Slurm cannot provide a
 GPU TRES reservation for this job. The script records this limitation explicitly and uses a
 user-scoped physical-GPU lock plus three startup samples of memory and utilization. This prevents
