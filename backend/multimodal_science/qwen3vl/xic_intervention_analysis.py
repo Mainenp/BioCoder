@@ -159,12 +159,18 @@ def _group_statistics(
             raise ValueError(f"Unsupported evaluation task: {task}")
     _require(grouped, f"No records found for scope {scope}")
     expected_tasks = {*CLASSIFICATION_TASKS, "peak_grounding", "scientific_qc"}
-    for group_id, tasks in grouped.items():
-        _require(
-            set(tasks) == expected_tasks,
-            f"Source group {group_id} lacks tasks in scope {scope}",
-        )
+    observed_tasks = {task for tasks in grouped.values() for task in tasks}
+    _require(
+        observed_tasks == expected_tasks,
+        f"Scope {scope} does not contain all required evaluation tasks",
+    )
     return grouped
+
+
+def _task_groups(
+    grouped: dict[str, dict[str, list[float]]], task: str
+) -> list[str]:
+    return sorted(group_id for group_id, tasks in grouped.items() if task in tasks)
 
 
 def _sum_stats(
@@ -179,19 +185,25 @@ def _sum_stats(
     return result
 
 
+def _task_metrics_from_stats(task: str, stats: list[float]) -> dict[str, float]:
+    if task in CLASSIFICATION_TASKS:
+        return _classification_from_counts(stats)
+    if task == "peak_grounding":
+        return {
+            "mean_bbox_iou_all": _divide(stats[0], stats[2]),
+            "iou_at_0_5_rate_all": _divide(stats[1], stats[2]),
+        }
+    if task == "scientific_qc":
+        return {"exact_match_rate": _divide(stats[0], stats[1])}
+    raise ValueError(f"Unsupported evaluation task: {task}")
+
+
 def _metrics_from_stats(stats: dict[str, list[float]]) -> dict[str, dict[str, float]]:
-    result = {
-        task: _classification_from_counts(stats[task])
-        for task in CLASSIFICATION_TASKS
+    expected_tasks = (*CLASSIFICATION_TASKS, "peak_grounding", "scientific_qc")
+    return {
+        task: _task_metrics_from_stats(task, stats[task])
+        for task in expected_tasks
     }
-    grounding = stats["peak_grounding"]
-    result["peak_grounding"] = {
-        "mean_bbox_iou_all": _divide(grounding[0], grounding[2]),
-        "iou_at_0_5_rate_all": _divide(grounding[1], grounding[2]),
-    }
-    qc = stats["scientific_qc"]
-    result["scientific_qc"] = {"exact_match_rate": _divide(qc[0], qc[1])}
-    return result
 
 
 def _selected_metrics(rows: Iterable[dict[str, Any]], scope: str) -> dict[str, Any]:
@@ -441,20 +453,36 @@ def _comparison_bootstrap(
     observed_aligned = _metrics_from_stats(_sum_stats(aligned_groups, groups))
     observed_candidate = _metrics_from_stats(_sum_stats(candidate_groups, groups))
     deltas: dict[tuple[str, str], list[float]] = {}
-    rng = random.Random(f"{seed}:{candidate_label}:{scope}")
-    for _ in range(iterations):
-        sampled = [rng.choice(groups) for _ in groups]
-        aligned_metrics = _metrics_from_stats(_sum_stats(aligned_groups, sampled))
-        candidate_metrics = _metrics_from_stats(_sum_stats(candidate_groups, sampled))
-        for task, values in aligned_metrics.items():
-            for metric, value in values.items():
+    task_group_counts: dict[str, int] = {}
+    for task in observed_aligned:
+        aligned_task_groups = _task_groups(aligned_groups, task)
+        candidate_task_groups = _task_groups(candidate_groups, task)
+        _require(
+            candidate_task_groups == aligned_task_groups,
+            f"{candidate_label}/{scope}/{task} task-group drift",
+        )
+        _require(
+            bool(aligned_task_groups),
+            f"{candidate_label}/{scope}/{task} has no source groups",
+        )
+        task_group_counts[task] = len(aligned_task_groups)
+        rng = random.Random(f"{seed}:{candidate_label}:{scope}:{task}")
+        for _ in range(iterations):
+            sampled = [
+                rng.choice(aligned_task_groups) for _ in aligned_task_groups
+            ]
+            aligned_stats = _sum_stats(aligned_groups, sampled)[task]
+            candidate_stats = _sum_stats(candidate_groups, sampled)[task]
+            aligned_metrics = _task_metrics_from_stats(task, aligned_stats)
+            candidate_metrics = _task_metrics_from_stats(task, candidate_stats)
+            for metric, value in aligned_metrics.items():
                 deltas.setdefault((task, metric), []).append(
-                    value - candidate_metrics[task][metric]
+                    value - candidate_metrics[metric]
                 )
 
     result: dict[str, Any] = {}
     for task, aligned_values in observed_aligned.items():
-        result[task] = {}
+        result[task] = {"source_groups": task_group_counts[task]}
         for metric, aligned_value in aligned_values.items():
             raw = np.asarray(deltas[(task, metric)], dtype=np.float64)
             low, high = np.quantile(raw, [0.025, 0.975]).tolist()
@@ -547,6 +575,8 @@ def _markdown(report: dict[str, Any]) -> str:
             "## Interpretation limits",
             "",
             "- Confidence intervals resample source groups, not prompts or language variants.",
+            "- Each task resamples only source groups containing that task; groups without "
+            "grounding labels are not converted into zero-IoU observations.",
             "- This is a single training seed on development validation data.",
             "- The sealed internal-test split remains unopened.",
             "- Intervention effects establish model reliance, not clinical or deployment validity.",
@@ -624,6 +654,7 @@ def analyze_xic_interventions(
             "confidence_level": 0.95,
             "resampling_unit": "source_group",
             "independent_units": shared["validation_source_groups"],
+            "task_specific_independent_units_recorded_with_each_task": True,
             "comparisons": comparisons,
         },
         "contracts": {
@@ -633,11 +664,13 @@ def analyze_xic_interventions(
             "same_validation_record_identities": True,
             "language_variants_not_independent": True,
             "paired_source_group_bootstrap": True,
+            "task_specific_source_group_eligibility": True,
             "internal_test_accessed": False,
         },
         "interpretation_limits": [
             "This is a single-training-seed development validation analysis.",
             "English and Chinese prompts are paired views of the same scientific assets.",
+            "Task-specific bootstrap populations exclude groups with no labels for that task.",
             "The sealed internal-test split remains unopened.",
             "Intervention effects measure reliance on XIC under this checkpoint, not deployment validity.",
         ],

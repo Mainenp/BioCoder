@@ -76,21 +76,22 @@ def _records(label: str) -> list[dict]:
                         "exact_match": predicted == truth,
                     }
                 )
-            rows.append(
-                {
-                    "instruction_id": f"{asset_id}-{language}-peak_grounding",
-                    "pair_id": f"{asset_id}-peak_grounding",
-                    "asset_id": asset_id,
-                    "group_id": group_id,
-                    "task": "peak_grounding",
-                    "language": language,
-                    "expected_bbox_2d": [10.0, 0.0, 20.0, 30.0],
-                    "bbox_iou": iou,
-                    "iou_at_0_5": iou >= 0.5,
-                    "schema_valid": True,
-                    "exact_match": iou == 1.0,
-                }
-            )
+            if truth:
+                rows.append(
+                    {
+                        "instruction_id": f"{asset_id}-{language}-peak_grounding",
+                        "pair_id": f"{asset_id}-peak_grounding",
+                        "asset_id": asset_id,
+                        "group_id": group_id,
+                        "task": "peak_grounding",
+                        "language": language,
+                        "expected_bbox_2d": [10.0, 0.0, 20.0, 30.0],
+                        "bbox_iou": iou,
+                        "iou_at_0_5": iou >= 0.5,
+                        "schema_valid": True,
+                        "exact_match": iou == 1.0,
+                    }
+                )
             rows.append(
                 {
                     "instruction_id": f"{asset_id}-{language}-scientific_qc",
@@ -221,6 +222,12 @@ class XicInterventionAnalysisTests(unittest.TestCase):
             )
             self.assertEqual(report["paired_group_bootstrap"]["independent_units"], 2)
             shuffled = report["paired_group_bootstrap"]["comparisons"]["shuffled"]
+            self.assertEqual(
+                shuffled["overall"]["peak_presence"]["source_groups"], 2
+            )
+            self.assertEqual(
+                shuffled["overall"]["peak_grounding"]["source_groups"], 1
+            )
             self.assertGreater(
                 shuffled["overall"]["peak_presence"]["macro_f1"][
                     "direction_adjusted_aligned_benefit"
