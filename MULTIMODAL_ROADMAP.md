@@ -14,8 +14,11 @@ SequencePeakNet ablations, and a full Qwen3-VL-4B bilingual zero-shot baseline w
 audit are verified externally. Cross-family comparison is implemented. The answer-isolated
 image/XIC bundle and a two-update LoRA-plus-projector CUDA smoke have passed their immutable input,
 forward/backward, serialization, and reload contracts. Full fusion training, same-validation
-fusion evaluation, internal-test extraction, replicated seeds, and all sealed benchmark claims
-remain incomplete.
+fusion evaluation for the canonical seed-17 model, causal XIC intervention analysis, and the full
+five-cell reproducibility/token matrix are complete. The remaining development gates are aligned
+same-validation evaluation and aggregation of all five matrix cells, the cross-family main table,
+and the bilingual/localization failure page. Internal-test extraction and all sealed benchmark
+claims remain incomplete.
 
 ## Verified Phase A snapshot
 
@@ -329,17 +332,19 @@ The first fusion sub-gate is an immutable, answer-isolated image/XIC link bundle
 not count as a completed fusion run until sensor tokens are injected into Qwen3-VL and the
 LoRA-plus-projector candidate is trained and evaluated on the same validation assets.
 
-The bounded injection/backpropagation gate, random-initialized formal fusion training, and complete
-same-validation fused evaluation are complete. Aligned, seeded deranged-shuffle, measured-zero,
-and availability-off inference runs have also completed without opening the internal test. Their
-next acceptance gate is a provenance-bound report that recomputes metrics and uses paired
-source-group bootstrap intervals; aggregate prompt-level deltas alone are insufficient. Sensor
-tokens `1/4/8`, learned gate values, and at least three independent training seeds remain required
-before the development protocol can be frozen.
+The bounded injection/backpropagation gate, canonical random-initialized formal fusion training,
+complete same-validation fused evaluation, and aligned/seeded-shuffle/measured-zero/
+availability-off inference are complete. Their provenance-bound report recomputed metrics from
+hash-bound records and used 10,000 paired source-group bootstrap resamples; it did not treat
+prompts or language variants as independent scientific units.
 
 The formal reproducibility matrix is fixed in code as four-token random-projector fusion at seeds
 `17/29/43`, plus one- and eight-token seed-17 pooling ablations. It is throttled to two concurrent
-Slurm entries and keeps auxiliary initialization as a separate experiment.
+Slurm entries and keeps auxiliary initialization as a separate experiment. All five formal runs
+completed 3,396 updates with verified manifests and one retained final checkpoint. The next gate
+uses `coder_fusion_evaluation_matrix.sbatch` for aligned full-validation inference and
+`coder_analyze_fusion_matrix.sbatch` for metric recomputation, three-seed mean/sample-SD,
+bilingual consistency, token-count deltas, and gate audit. Internal test remains sealed.
 
 Four additional vendor containers are now admitted only through an auxiliary-unlabeled contract.
 They comprise four independent source groups, 77 converted acquisition frames, and 1,610 transition

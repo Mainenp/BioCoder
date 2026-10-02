@@ -128,6 +128,35 @@ class FusionTrainingContractTests(unittest.TestCase):
         self.assertIn("INTERNAL_TEST_ACCESSED=false", script)
         self.assertIn('exec bash "$training_script"', script)
 
+    def test_evaluation_matrix_reuses_the_same_five_training_cells(self) -> None:
+        script = (
+            Path(__file__).parents[2]
+            / "multimodal_science"
+            / "qwen3vl"
+            / "slurm"
+            / "coder_fusion_evaluation_matrix.sbatch"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("#SBATCH --job-name=coder", script)
+        self.assertIn("#SBATCH --array=0-4%2", script)
+        self.assertIn("BIOCODER_MATRIX_TRAINING_ROOT", script)
+        self.assertIn("BIOCODER_MATRIX_TRAINING_REVISION", script)
+        for configuration in (
+            "sensor_tokens=4; training_seed=17",
+            "sensor_tokens=4; training_seed=29",
+            "sensor_tokens=4; training_seed=43",
+            "sensor_tokens=1; training_seed=17",
+            "sensor_tokens=8; training_seed=17",
+        ):
+            self.assertIn(configuration, script)
+        self.assertIn("MATRIX_TRAINING_INPUT_CONTRACT=OK", script)
+        self.assertIn("report[\"training\"][\"optimizer_updates\"] == 3396", script)
+        self.assertIn("export BIOCODER_XIC_INTERVENTION=aligned", script)
+        self.assertIn("export BIOCODER_SEED=17", script)
+        self.assertIn("export BIOCODER_BOOTSTRAP_ITERATIONS=1000", script)
+        self.assertIn("INTERNAL_TEST_ACCESSED=false", script)
+        self.assertIn('exec bash "$evaluation_script"', script)
+
 
 if __name__ == "__main__":
     unittest.main()

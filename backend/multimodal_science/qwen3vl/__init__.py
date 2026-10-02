@@ -64,6 +64,11 @@ from multimodal_science.qwen3vl.xic_intervention_analysis import (
     XicInterventionRun,
     analyze_xic_interventions,
 )
+from multimodal_science.qwen3vl.fusion_matrix_analysis import (
+    FusionMatrixAnalysisResult,
+    FusionMatrixRun,
+    analyze_fusion_matrix,
+)
 
 __all__ = [
     "AdapterSpec",
@@ -83,6 +88,8 @@ __all__ = [
     "GenerationSettings",
     "CrossFamilyComparisonResult",
     "FusionBundleResult",
+    "FusionMatrixAnalysisResult",
+    "FusionMatrixRun",
     "FusionTrainingResult",
     "FusionTrainingSettings",
     "SensorProjectorSpec",
@@ -95,6 +102,7 @@ __all__ = [
     "evaluate_qwen_predictions",
     "audit_zero_shot_failures",
     "analyze_xic_interventions",
+    "analyze_fusion_matrix",
     "run_qwen_inference",
     "run_lora_training",
     "build_sensor_projector",

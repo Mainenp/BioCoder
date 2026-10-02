@@ -852,17 +852,36 @@ hashes, greedy batch-one decoding, complete prompt coverage, evaluator provenanc
 no-internal-test contract all pass. The same validation set remains development-only and must not
 be used as the reward source for later RL or preference optimization.
 
-The random-initialized formal fusion checkpoint and all four aligned/shuffled/zero/availability-off
-validation runs have completed their generation and evaluation contracts without opening the
-internal test. The next gates are the provenance-bound paired intervention report, sensor-token
-counts `1/4/8`, gate-value audit, and three independent training seeds. These remain development
-validation evidence; no final-benchmark claim is permitted yet.
+The canonical random-initialized fusion checkpoint and all four aligned/shuffled/zero/
+availability-off validation runs completed without opening the internal test. Their
+provenance-bound 10,000-resample source-group bootstrap also completed: aligned XIC was better
+than every intervention on the primary classification, localization, and QC endpoints. This is
+the causal modality-use check; the learned gate magnitude is not interpreted as a percentage of
+XIC use.
 
 `qwen3vl/slurm/coder_fusion_development_matrix.sbatch` fixes that remaining training matrix. Its
 five array entries run the primary four-token configuration at seeds `17/29/43` and the one- and
 eight-token pooling variants at seed `17`. The array is throttled to two concurrent entries,
 forbids step caps, explicitly removes auxiliary-projector initialization, and delegates to the
 same resumable, hash-bound formal trainer. Auxiliary initialization remains a separate ablation.
+All five entries have now completed 3,396 optimizer updates and retained exactly one final
+checkpoint each. Their final gate probabilities are approximately `0.01847`, `0.01856`, and
+`0.01851` for the three four-token seeds, `0.01797` for one token, and `0.01829` for eight tokens.
+
+Run `qwen3vl/slurm/coder_fusion_evaluation_matrix.sbatch` to evaluate those five immutable
+training artifacts on the same 13,708 bilingual validation prompts. The array keeps generation
+seed `17` fixed for every entry; seed `17/29/43` denotes training repetition and must not leak into
+the inference protocol. After all entries pass, `coder_analyze_fusion_matrix.sbatch` verifies
+every training/generation/evaluation manifest, recomputes selected metrics from the 13,708
+hash-bound evaluation records, checks identical scientific-unit identities, and publishes:
+
+- mean and sample standard deviation across the three four-token training seeds;
+- English and Chinese metrics plus their per-seed gaps and cross-language consistency;
+- the seed-17 one/four/eight-token ablation without inventing cross-seed uncertainty; and
+- initial/final gate values, output-schema rates, and exact provenance hashes.
+
+Both stages expose no internal-test input. Their results remain development evidence until the
+protocol is frozen and the sealed internal test is opened once.
 
 The current cluster advertises `Gres=(null)` for its GPU partitions, so Slurm cannot provide a
 GPU TRES reservation for this job. The script records this limitation explicitly and uses a

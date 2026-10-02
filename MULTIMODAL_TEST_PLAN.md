@@ -229,6 +229,19 @@ Status: planned. A requirement is complete only when its linked checks pass with
 - The reproducibility matrix uses random projector initialization for every row, trains the
   four-token primary at seeds `17/29/43`, and changes only token count for the one- and eight-token
   seed-17 rows. Its Slurm array is capped at two concurrent entries and forbids sample/step caps.
+- All five matrix training runs must finish 3,396 optimizer updates, retain one final checkpoint,
+  and pass exact artifact-manifest verification before evaluation. Their validation array fixes
+  greedy batch-one generation seed `17` for every row; training seed is provenance, not an
+  inference hyperparameter.
+- Matrix aggregation accepts exactly the five declared cells. It verifies training, generation,
+  prediction, evaluation-record, and evaluation-report hashes; recomputes selected metrics from
+  the 13,708 records; and requires identical instruction/pair/asset/group/task/language/target
+  identities across runs. Four-token seeds report arithmetic mean and sample standard deviation
+  (`ddof=1`). Token counts `1/4/8` have only seed 17 and therefore report raw values and directed
+  deltas, never a fabricated cross-seed variance.
+- English and Chinese are reported separately but remain paired views of 1,815 assets. The matrix
+  report includes per-seed English-minus-Chinese gaps and cross-language consistency; neither the
+  13,708 prompt count nor 6,854 language rows is treated as an independent-sample count.
 - Every run emits an adapter or checkpoint, configuration snapshot, dataset version, logs, and run metadata.
 - Sequence-only and sequence-plus-metadata runs share the same encoder and heads so that their
   ablation changes exactly one input modality.
