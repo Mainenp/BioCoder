@@ -69,6 +69,10 @@ from multimodal_science.qwen3vl.fusion_matrix_analysis import (
     FusionMatrixRun,
     analyze_fusion_matrix,
 )
+from multimodal_science.qwen3vl.development_dossier import (
+    DevelopmentDossierResult,
+    build_development_dossier,
+)
 
 __all__ = [
     "AdapterSpec",
@@ -87,6 +91,7 @@ __all__ = [
     "XicInterventionRun",
     "GenerationSettings",
     "CrossFamilyComparisonResult",
+    "DevelopmentDossierResult",
     "FusionBundleResult",
     "FusionMatrixAnalysisResult",
     "FusionMatrixRun",
@@ -99,6 +104,7 @@ __all__ = [
     "build_instruction_dataset",
     "build_lora_training_bundle",
     "build_cross_family_development_comparison",
+    "build_development_dossier",
     "evaluate_qwen_predictions",
     "audit_zero_shot_failures",
     "analyze_xic_interventions",

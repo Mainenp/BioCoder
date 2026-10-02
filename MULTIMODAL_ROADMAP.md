@@ -15,10 +15,12 @@ audit are verified externally. Cross-family comparison is implemented. The answe
 image/XIC bundle and a two-update LoRA-plus-projector CUDA smoke have passed their immutable input,
 forward/backward, serialization, and reload contracts. Full fusion training, same-validation
 fusion evaluation for the canonical seed-17 model, causal XIC intervention analysis, and the full
-five-cell reproducibility/token matrix are complete. The remaining development gates are aligned
-same-validation evaluation and aggregation of all five matrix cells, the cross-family main table,
-and the bilingual/localization failure page. Internal-test extraction and all sealed benchmark
-claims remain incomplete.
+five-cell reproducibility/token matrix are complete. Aligned same-validation evaluation and
+provenance-bound aggregation of all five matrix cells are also complete. The remaining
+development gate is materialization of the implemented cross-family development dossier, which
+combines the main table with a hash-bound bilingual/localization failure page and explicitly
+checks whether causal XIC interventions use the exact selected checkpoint. Internal-test
+extraction and all sealed benchmark claims remain incomplete.
 
 ## Verified Phase A snapshot
 
@@ -341,10 +343,13 @@ prompts or language variants as independent scientific units.
 The formal reproducibility matrix is fixed in code as four-token random-projector fusion at seeds
 `17/29/43`, plus one- and eight-token seed-17 pooling ablations. It is throttled to two concurrent
 Slurm entries and keeps auxiliary initialization as a separate experiment. All five formal runs
-completed 3,396 updates with verified manifests and one retained final checkpoint. The next gate
-uses `coder_fusion_evaluation_matrix.sbatch` for aligned full-validation inference and
-`coder_analyze_fusion_matrix.sbatch` for metric recomputation, three-seed mean/sample-SD,
-bilingual consistency, token-count deltas, and gate audit. Internal test remains sealed.
+completed 3,396 updates with verified manifests and one retained final checkpoint.
+`coder_fusion_evaluation_matrix.sbatch` then completed aligned full-validation inference for
+every cell, and `coder_analyze_fusion_matrix.sbatch` published metric recomputation, three-seed
+mean/sample-SD, bilingual consistency, token-count deltas, and the gate audit. The next
+implemented gate is `coder_build_development_dossier.sbatch`, which joins that matrix with the
+earlier cross-family and causal-intervention evidence and emits the frozen main table plus
+bilingual/localization failure cases. Internal test remains sealed.
 
 Four additional vendor containers are now admitted only through an auxiliary-unlabeled contract.
 They comprise four independent source groups, 77 converted acquisition frames, and 1,610 transition

@@ -242,6 +242,16 @@ Status: planned. A requirement is complete only when its linked checks pass with
 - English and Chinese are reported separately but remain paired views of 1,815 assets. The matrix
   report includes per-seed English-minus-Chinese gaps and cross-language consistency; neither the
   13,708 prompt count nor 6,854 language rows is treated as an independent-sample count.
+- The pre-test development dossier accepts only manifest-verified cross-family, five-cell matrix,
+  XIC-intervention, and selected seed-17 evaluation artifacts. It verifies one Dataset identity,
+  all five declared matrix cells, seeds `17/29/43`, sample-SD recomputation, prompt/answer/model
+  hashes, and evaluation-record identities. It binds the selected evaluation report and records
+  to the four-token seed-17 matrix row and generates both the main table and deterministic
+  bilingual/localization failure records. Grounding correctness uses IoU >= 0.5 rather than
+  coordinate-exact equality.
+- The dossier must record whether the intervention analysis uses the exact selected checkpoint.
+  Protocol-level evidence from an independently trained checkpoint is retained but cannot silently
+  satisfy the selected-candidate causal gate or authorize sealed-test access.
 - Every run emits an adapter or checkpoint, configuration snapshot, dataset version, logs, and run metadata.
 - Sequence-only and sequence-plus-metadata runs share the same encoder and heads so that their
   ablation changes exactly one input modality.

@@ -883,6 +883,27 @@ hash-bound evaluation records, checks identical scientific-unit identities, and 
 Both stages expose no internal-test input. Their results remain development evidence until the
 protocol is frozen and the sealed internal test is opened once.
 
+After the five-cell analysis succeeds, build the final pre-test development dossier:
+
+```bash
+python -m multimodal_science.qwen3vl.build_development_dossier_cli \
+  --cross-family-report "<comparison-root>/cross_family_development_report.json" \
+  --fusion-matrix-report "<matrix-analysis-root>/fusion_matrix_analysis.json" \
+  --xic-intervention-report "<intervention-root>/xic_intervention_analysis.json" \
+  --selected-fusion-evaluation-root "<four-token-seed17-evaluation-root>" \
+  --output-dir "<comparison-root>/multimodal-development-dossier"
+```
+
+`qwen3vl/slurm/coder_build_development_dossier.sbatch` provides the scheduled form. It verifies
+all four input manifests plus the hash-bound reports behind the cross-family comparison, validates
+the full five-cell/three-seed matrix statistics, and requires prompt, answer, base-model, selected
+evaluation-record, training-report, and training-manifest identities to agree. It runs from an
+immutable `git archive` of the declared revision and emits a nine-row cross-family table, a
+bilingual/localization failure page, the complete deterministic failure-case JSONL, and an exact
+artifact manifest. The dossier records rather than hides whether the earlier intervention
+experiment used the exact selected checkpoint. A mismatch keeps the candidate pre-test-ineligible
+until the four interventions are repeated on the selected checkpoint.
+
 The current cluster advertises `Gres=(null)` for its GPU partitions, so Slurm cannot provide a
 GPU TRES reservation for this job. The script records this limitation explicitly and uses a
 user-scoped physical-GPU lock plus three startup samples of memory and utilization. This prevents
