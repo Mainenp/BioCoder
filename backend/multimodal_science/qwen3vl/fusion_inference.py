@@ -21,6 +21,7 @@ from multimodal_science.qwen3vl.fusion_training import FUSION_TRAINING_REPORT_SC
 from multimodal_science.qwen3vl.inference import (
     AdapterSpec,
     BatchGenerator,
+    FinalBenchmarkAccessSpec,
     GenerationSettings,
     PromptRequest,
     QwenInferenceResult,
@@ -319,6 +320,7 @@ def _load_validation_inputs(
     dataset_report_sha256: str,
     inference_bundle_root: Path,
     inference_bundle_report_sha256: str,
+    final_access: dict[str, str] | None = None,
 ) -> _ValidationInputs:
     for digest, label in (
         (fusion_bundle_report_sha256, "fusion bundle"),
@@ -333,50 +335,84 @@ def _load_validation_inputs(
     dataset_path = data_root / "dataset_report.json"
     fusion = _read_json(fusion_path, "fusion bundle report")
     dataset = _read_json(dataset_path, "Dataset report")
-    _require(sha256_file(fusion_path) == fusion_bundle_report_sha256, "Fusion bundle hash mismatch")
+    _require(
+        sha256_file(fusion_path) == fusion_bundle_report_sha256,
+        "Fusion bundle hash mismatch",
+    )
     _require(sha256_file(dataset_path) == dataset_report_sha256, "Dataset hash mismatch")
-    _require(fusion.get("schema_version") == FUSION_BUNDLE_SCHEMA, "Fusion inference requires v2")
+    final_mode = final_access is not None
+    expected_fusion_schema = (
+        "chrompeak-qwen3vl-final-xic-bundle-v1"
+        if final_mode
+        else FUSION_BUNDLE_SCHEMA
+    )
+    _require(
+        fusion.get("schema_version") == expected_fusion_schema,
+        "Unsupported fusion inference bundle",
+    )
     _require(dataset.get("schema_version") == DATASET_SCHEMA, "Unsupported Dataset schema")
     _require(dataset.get("target_points") == 160, "Unexpected XIC point count")
-    _require(dataset.get("splits") == ["train", "validation"], "Unexpected Dataset splits")
+    expected_split = "internal_test" if final_mode else "validation"
+    expected_splits = ["internal_test"] if final_mode else ["train", "validation"]
+    _require(dataset.get("splits") == expected_splits, "Unexpected Dataset splits")
     contracts = _object(fusion.get("contracts"), "fusion contracts")
-    for name, expected in (
-        ("validation_answer_key_opened", False),
-        ("signals_external_to_bundle", True),
-        ("source_group_overlap", 0),
-        ("internal_test_accessed", False),
-    ):
-        _require(contracts.get(name) == expected, f"Fusion contract failed: {name}")
-    _require(fusion.get("internal_test_accessed") is False, "Fusion bundle accessed test data")
-    sources = _object(fusion.get("sources"), "fusion sources")
+    _require(contracts.get("signals_external_to_bundle") is True, "Signals are embedded")
+    sources = _object(
+        fusion.get("source" if final_mode else "sources"), "fusion sources"
+    )
     _require(sources.get("dataset_report_sha256") == dataset_report_sha256, "Dataset drift")
     _require(
         sources.get("inference_bundle_report_sha256") == inference_bundle_report_sha256,
         "Inference-bundle drift",
     )
-    _, prompts, _ = _load_bundle(inference_root, inference_bundle_report_sha256)
+    if final_mode:
+        _require(contracts.get("answer_key_opened_by_generation") is False, "Answer leak")
+        _require(contracts.get("split") == "internal_test", "Bad final fusion split")
+        _require(fusion.get("internal_test_accessed") is True, "Fusion is not test-bound")
+        _require(
+            sources.get("protocol_sha256") == final_access["protocol_sha256"],
+            "Fusion protocol drift",
+        )
+        _require(sources.get("access_id") == final_access["access_id"], "Fusion access drift")
+    else:
+        for name, expected in (
+            ("validation_answer_key_opened", False),
+            ("source_group_overlap", 0),
+            ("internal_test_accessed", False),
+        ):
+            _require(contracts.get(name) == expected, f"Fusion contract failed: {name}")
+        _require(fusion.get("internal_test_accessed") is False, "Fusion accessed test data")
+    _, prompts, _ = _load_bundle(
+        inference_root,
+        inference_bundle_report_sha256,
+        final_access=final_access,
+    )
+    link_key = "internal_test_xic_links" if final_mode else "validation_xic_links"
     links_path, links_artifact = _artifact(
         fusion_root,
         fusion,
-        "validation_xic_links",
-        label="validation XIC links",
+        link_key,
+        label=f"{expected_split} XIC links",
     )
     examples_path, examples_artifact = _artifact(
         data_root,
         dataset,
-        "validation_examples",
-        label="validation examples",
+        f"{expected_split}_examples",
+        label=f"{expected_split} examples",
     )
     signals_path, signals_artifact = _artifact(
         data_root,
         dataset,
-        "validation_signals",
-        label="validation signals",
+        f"{expected_split}_signals",
+        label=f"{expected_split} signals",
     )
     links = _read_jsonl(links_path, "validation XIC links")
     examples = _read_jsonl(examples_path, "validation examples")
     _require(links_artifact.get("records") == len(links), "Validation link count mismatch")
-    _require(examples_artifact.get("records") == len(examples), "Validation example count mismatch")
+    _require(
+        examples_artifact.get("records") == len(examples),
+        "Validation example count mismatch",
+    )
     _require(len(links) == len(prompts), "Validation prompt/link count mismatch")
     signal_shape = signals_artifact.get("shape")
     _require(signal_shape == [len(examples), 160], "Validation signal shape mismatch")
@@ -386,7 +422,7 @@ def _load_validation_inputs(
     for prompt, link in zip(prompts, links):
         instruction_id = str(prompt.get("instruction_id") or "")
         _require(link.get("schema_version") == FUSION_LINK_SCHEMA, "Bad validation link schema")
-        _require(link.get("split") == "validation", "Bad validation link split")
+        _require(link.get("split") == expected_split, "Bad fusion link split")
         for field in ("instruction_id", "task", "language", "pair_id", "image"):
             _require(prompt.get(field) == link.get(field), f"Prompt/link mismatch: {field}")
         _require(instruction_id not in links_by_id, "Duplicate validation instruction ID")
@@ -395,7 +431,7 @@ def _load_validation_inputs(
         sequence = _object(example.get("sequence"), "validation sequence")
         signal = _object(link.get("signal"), "validation signal link")
         for actual, expected, label in (
-            (example.get("split"), "validation", "split"),
+            (example.get("split"), expected_split, "split"),
             (example.get("group_id"), link.get("group_id"), "group"),
             (image.get("path"), link.get("image"), "image path"),
             (image.get("sha256"), link.get("image_sha256"), "image hash"),
@@ -763,11 +799,35 @@ def run_fusion_inference(
     resume: bool = False,
     xic_intervention: str = "aligned",
     xic_intervention_seed: int = 17,
+    final_benchmark_access: FinalBenchmarkAccessSpec | None = None,
 ) -> QwenInferenceResult:
     """Generate prompt-only validation predictions from image plus XIC inputs."""
 
     _require(settings.batch_size == 1, "Fusion inference requires batch_size=1")
     _require(not settings.do_sample, "Fusion development evaluation requires greedy decoding")
+    final_access = None
+    if final_benchmark_access is not None:
+        _require(
+            final_benchmark_access.candidate_name == "qwen3vl_image_xic_fusion",
+            "Final fusion inference requires the frozen fusion candidate",
+        )
+        _require(max_records is None, "Final fusion inference requires complete prompt coverage")
+        _require(xic_intervention == "aligned", "Final benchmark forbids XIC interventions")
+        from multimodal_science.qwen3vl.final_benchmark_protocol import (
+            verify_final_benchmark_access,
+        )
+
+        access_state = verify_final_benchmark_access(
+            protocol_root=final_benchmark_access.protocol_root,
+            expected_protocol_sha256=final_benchmark_access.protocol_sha256,
+            ledger_dir=final_benchmark_access.ledger_dir,
+        )
+        _require(not access_state.completed, "Final benchmark access is already completed")
+        final_access = {
+            "access_id": access_state.access_id,
+            "protocol_sha256": final_benchmark_access.protocol_sha256,
+            "candidate_name": final_benchmark_access.candidate_name,
+        }
     validation = _load_validation_inputs(
         fusion_bundle_root=fusion_bundle_root,
         fusion_bundle_report_sha256=fusion_bundle_report_sha256,
@@ -775,6 +835,7 @@ def run_fusion_inference(
         dataset_report_sha256=dataset_report_sha256,
         inference_bundle_root=inference_bundle_root,
         inference_bundle_report_sha256=inference_bundle_report_sha256,
+        final_access=final_access,
     )
     intervention = _build_xic_intervention_plan(
         validation.links_by_instruction_id,
@@ -814,4 +875,5 @@ def run_fusion_inference(
         resume=resume,
         generator_factory=generator_factory,
         adapter_verifier=verifier,
+        final_benchmark_access=final_benchmark_access,
     )

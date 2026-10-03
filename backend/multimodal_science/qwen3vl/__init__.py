@@ -10,6 +10,7 @@ from multimodal_science.qwen3vl.evaluation import (
 )
 from multimodal_science.qwen3vl.inference import (
     AdapterSpec,
+    FinalBenchmarkAccessSpec,
     GenerationSettings,
     QwenInferenceResult,
     run_qwen_inference,
@@ -73,6 +74,30 @@ from multimodal_science.qwen3vl.development_dossier import (
     DevelopmentDossierResult,
     build_development_dossier,
 )
+from multimodal_science.qwen3vl.final_benchmark_protocol import (
+    FinalBenchmarkAccessResult,
+    FinalBenchmarkProtocolResult,
+    FinalBenchmarkRuntimeContext,
+    complete_final_benchmark_access,
+    freeze_final_benchmark_protocol,
+    load_final_benchmark_context,
+    open_final_benchmark_access,
+    verify_final_benchmark_access,
+)
+from multimodal_science.qwen3vl.final_benchmark_data import (
+    FINAL_ANSWER_REPORT_SCHEMA,
+    FINAL_BENCHMARK_DATA_SCHEMA,
+    FINAL_DETECTOR_DATASET_SCHEMA,
+    FINAL_FUSION_BUNDLE_SCHEMA,
+    FINAL_INFERENCE_BUNDLE_SCHEMA,
+    FinalBenchmarkDataResult,
+    build_final_benchmark_data,
+)
+from multimodal_science.qwen3vl.final_benchmark_evaluation import (
+    FINAL_QWEN_EVALUATION_SCHEMA,
+    FinalQwenEvaluationResult,
+    evaluate_final_qwen_predictions,
+)
 
 __all__ = [
     "AdapterSpec",
@@ -97,6 +122,10 @@ __all__ = [
     "FusionMatrixRun",
     "FusionTrainingResult",
     "FusionTrainingSettings",
+    "FinalBenchmarkAccessResult",
+    "FinalBenchmarkAccessSpec",
+    "FinalBenchmarkProtocolResult",
+    "FinalBenchmarkRuntimeContext",
     "SensorProjectorSpec",
     "build_fusion_bundle",
     "build_auxiliary_pretraining_dataset",
@@ -105,15 +134,30 @@ __all__ = [
     "build_lora_training_bundle",
     "build_cross_family_development_comparison",
     "build_development_dossier",
+    "complete_final_benchmark_access",
+    "build_final_benchmark_data",
     "evaluate_qwen_predictions",
+    "evaluate_final_qwen_predictions",
+    "freeze_final_benchmark_protocol",
+    "FinalBenchmarkDataResult",
+    "FinalQwenEvaluationResult",
+    "FINAL_ANSWER_REPORT_SCHEMA",
+    "FINAL_BENCHMARK_DATA_SCHEMA",
+    "FINAL_DETECTOR_DATASET_SCHEMA",
+    "FINAL_FUSION_BUNDLE_SCHEMA",
+    "FINAL_INFERENCE_BUNDLE_SCHEMA",
+    "FINAL_QWEN_EVALUATION_SCHEMA",
     "audit_zero_shot_failures",
     "analyze_xic_interventions",
     "analyze_fusion_matrix",
     "run_qwen_inference",
+    "open_final_benchmark_access",
+    "load_final_benchmark_context",
     "run_lora_training",
     "build_sensor_projector",
     "insert_sensor_embeddings",
     "run_fusion_training",
     "run_fusion_inference",
     "run_auxiliary_pretraining",
+    "verify_final_benchmark_access",
 ]

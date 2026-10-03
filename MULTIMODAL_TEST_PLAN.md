@@ -282,6 +282,26 @@ The versioned scientific report must contain:
 - Boundary metrics are restricted to labelled positives and include both normalized and physical
   time errors.
 
+### T23A — One-time sealed model benchmark
+
+- Protocol freezing must verify the completed development dossier, exact five-candidate set,
+  validation-frozen thresholds, split manifest, derivation plan, train-fitted normalization,
+  immutable model artifacts, decoding settings, and 10,000-resample source-group bootstrap policy
+  without reading or materializing any internal-test record.
+- The sole access ledger must be created atomically before the first protected record is read.
+  A second access event is forbidden; crash recovery may resume only the identical protocol and
+  access ID. Completion may be retried only with the identical final evidence manifest.
+- Prompt-only inference inputs and evaluator-only answers must be physically separate and
+  independently hash-bound. Model processes receive no answer-root path.
+- Exactly five primary candidates are evaluated: Qwen3-VL zero-shot, image-only LoRA, image+XIC,
+  SequencePeakNet, and ChromPeakFormer. No post-test model, token-count, threshold, prompt, or
+  decoding selection is allowed.
+- Qwen results are reported separately for English and Chinese. Bootstrap units are complete source
+  mzML groups; prompt rows and language variants are never treated as independent samples.
+- Final outputs must contain the five-candidate table, every bound evaluation report, an evidence
+  registry, the access completion record, and exact SHA-256 manifests. Model-benchmark eligibility
+  does not imply BioCoder agent promotion.
+
 ### T24 — Agent report
 
 The versioned agent report must contain:

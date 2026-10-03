@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import math
+import re
 import tempfile
 from collections import Counter, defaultdict
 from dataclasses import dataclass
@@ -26,6 +27,7 @@ SCALAR_FEATURE_NAMES = (
 STANDARDIZED_SCALAR_COUNT = len(SCALAR_FEATURE_NAMES) - 1
 IMAGE_WIDTH = 400.0
 BOUNDARY_TOLERANCE = 1e-3
+_HEX_64 = re.compile(r"^[0-9a-f]{64}$")
 
 
 @dataclass(frozen=True)
@@ -224,6 +226,7 @@ def _existing_result(
     preflight_sha256: str,
     target_points: int,
     include_splits: frozenset[str],
+    frozen_scalar_normalization_sha256: str | None,
 ) -> MultimodalDatasetResult | None:
     report_path = output_dir / "dataset_report.json"
     if not output_dir.exists():
@@ -238,6 +241,7 @@ def _existing_result(
         "sequence_preflight_sha256": preflight_sha256,
         "target_points": target_points,
         "splits": sorted(include_splits),
+        "frozen_scalar_normalization_sha256": frozen_scalar_normalization_sha256,
     }
     for field, value in expected.items():
         _require(report.get(field) == value, f"Existing dataset {field} mismatch")
@@ -271,6 +275,8 @@ def build_multimodal_dataset(
     *,
     include_splits: frozenset[str] = frozenset({"train", "validation"}),
     target_points: int = 160,
+    scalar_normalization_path: Path | None = None,
+    scalar_normalization_sha256: str | None = None,
     progress_callback: Callable[[int, int, str], None] | None = None,
 ) -> MultimodalDatasetResult:
     """Build a model-ready, provenance-bound multimodal dataset atomically."""
@@ -282,6 +288,8 @@ def build_multimodal_dataset(
     sequence_preflight_path = sequence_preflight_path.resolve()
     assets_root = assets_root.resolve()
     output_dir = output_dir.resolve()
+    if scalar_normalization_path is not None:
+        scalar_normalization_path = scalar_normalization_path.resolve()
     for path, description in (
         (asset_index_path, "asset index"),
         (readiness_report_path, "training-readiness report"),
@@ -293,6 +301,24 @@ def build_multimodal_dataset(
         raise FileNotFoundError(f"Assets root not found: {assets_root}")
     _require(bool(include_splits), "At least one split must be selected")
     _require(target_points >= 32, "target_points must be at least 32")
+    _require(
+        (scalar_normalization_path is None) == (scalar_normalization_sha256 is None),
+        "Frozen scalar normalization path and SHA-256 must be provided together",
+    )
+    if scalar_normalization_path is not None:
+        _require(
+            scalar_normalization_path.is_file(),
+            f"Frozen scalar normalization not found: {scalar_normalization_path}",
+        )
+        _require(
+            isinstance(scalar_normalization_sha256, str)
+            and bool(_HEX_64.fullmatch(scalar_normalization_sha256)),
+            "Invalid frozen scalar normalization SHA-256",
+        )
+        _require(
+            sha256_file(scalar_normalization_path) == scalar_normalization_sha256,
+            "Frozen scalar normalization hash mismatch",
+        )
 
     (
         asset_index_sha256,
@@ -310,6 +336,7 @@ def build_multimodal_dataset(
         preflight_sha256=preflight_sha256,
         target_points=target_points,
         include_splits=include_splits,
+        frozen_scalar_normalization_sha256=scalar_normalization_sha256,
     )
     if cached is not None:
         return cached
@@ -478,11 +505,68 @@ def build_multimodal_dataset(
         if progress_callback is not None:
             progress_callback(matrix_number, len(matrix_items), relative_path)
 
-    _require("train" in raw_scalars, "A train split is required for scalar normalization")
-    train_values = raw_scalars["train"][:, :STANDARDIZED_SCALAR_COUNT]
-    scalar_mean = np.mean(train_values, axis=0)
-    scalar_std = np.std(train_values, axis=0)
-    scalar_std = np.where(scalar_std > 1e-12, scalar_std, 1.0)
+    if scalar_normalization_path is None:
+        _require("train" in raw_scalars, "A train split is required for scalar normalization")
+        train_values = raw_scalars["train"][:, :STANDARDIZED_SCALAR_COUNT]
+        scalar_mean = np.mean(train_values, axis=0)
+        scalar_std = np.std(train_values, axis=0)
+        scalar_std = np.where(scalar_std > 1e-12, scalar_std, 1.0)
+        normalization_payload = {
+            "schema_version": "chrompeak-scalar-normalization-v1",
+            "fit_split": "train",
+            "feature_names": list(SCALAR_FEATURE_NAMES),
+            "standardized_feature_count": STANDARDIZED_SCALAR_COUNT,
+            "mean": [float(value) for value in scalar_mean],
+            "std": [float(value) for value in scalar_std],
+            "signal_available_standardized": False,
+        }
+    else:
+        _require("train" not in raw_scalars, "Frozen normalization is only for non-train splits")
+        normalization_payload = _read_json(
+            scalar_normalization_path, "frozen scalar normalization"
+        )
+        _require(
+            normalization_payload.get("schema_version")
+            == "chrompeak-scalar-normalization-v1",
+            "Unsupported frozen scalar-normalization schema",
+        )
+        _require(
+            normalization_payload.get("fit_split") == "train",
+            "Frozen scalar normalization was not fitted on train",
+        )
+        _require(
+            normalization_payload.get("feature_names") == list(SCALAR_FEATURE_NAMES),
+            "Frozen scalar-normalization feature order mismatch",
+        )
+        _require(
+            normalization_payload.get("standardized_feature_count")
+            == STANDARDIZED_SCALAR_COUNT,
+            "Frozen scalar-normalization feature count mismatch",
+        )
+        _require(
+            normalization_payload.get("signal_available_standardized") is False,
+            "Frozen normalization must preserve signal availability",
+        )
+        means = normalization_payload.get("mean")
+        standard_deviations = normalization_payload.get("std")
+        _require(
+            isinstance(means, list)
+            and isinstance(standard_deviations, list)
+            and len(means) == STANDARDIZED_SCALAR_COUNT
+            and len(standard_deviations) == STANDARDIZED_SCALAR_COUNT,
+            "Frozen scalar-normalization vector shape mismatch",
+        )
+        scalar_mean = np.asarray(
+            [_finite(value, "frozen scalar mean") for value in means], dtype=np.float64
+        )
+        scalar_std = np.asarray(
+            [_finite(value, "frozen scalar standard deviation") for value in standard_deviations],
+            dtype=np.float64,
+        )
+        _require(
+            bool(np.all(scalar_std > 0.0)),
+            "Frozen scalar standard deviation must be positive",
+        )
     standardized_scalars = {}
     for split, values in raw_scalars.items():
         standardized = values.astype(np.float32)
@@ -497,18 +581,7 @@ def build_multimodal_dataset(
     ) as staging_name:
         staging = Path(staging_name)
         normalization_path = staging / "scalar_normalization.json"
-        _write_json(
-            normalization_path,
-            {
-                "schema_version": "chrompeak-scalar-normalization-v1",
-                "fit_split": "train",
-                "feature_names": list(SCALAR_FEATURE_NAMES),
-                "standardized_feature_count": STANDARDIZED_SCALAR_COUNT,
-                "mean": [float(value) for value in scalar_mean],
-                "std": [float(value) for value in scalar_std],
-                "signal_available_standardized": False,
-            },
-        )
+        _write_json(normalization_path, normalization_payload)
         artifacts: dict[str, dict[str, Any]] = {}
         for split in sorted(by_split):
             split_dir = staging / split
@@ -557,6 +630,7 @@ def build_multimodal_dataset(
                 "sequence_preflight_sha256": preflight_sha256,
                 "target_points": target_points,
                 "splits": sorted(by_split),
+                "frozen_scalar_normalization_sha256": scalar_normalization_sha256,
                 "counts": {
                     "assets": asset_count,
                     "matrices": len(matrix_items),
@@ -578,7 +652,11 @@ def build_multimodal_dataset(
                         f"rt-linear-{target_points}|p05-baseline|clip-nonnegative|log1p|roi-max"
                     ),
                     "scalar_features": list(SCALAR_FEATURE_NAMES),
-                    "scalar_normalization": "train-only-zscore-first-six",
+                    "scalar_normalization": (
+                        "frozen-train-zscore-first-six"
+                        if scalar_normalization_sha256 is not None
+                        else "train-only-zscore-first-six"
+                    ),
                     "target_columns": ["peak_present", "start_normalized", "end_normalized"],
                     "negative_boundary_sentinel": -1.0,
                     "coordinate_system": "shared-image-sequence-roi-fraction-0-1",

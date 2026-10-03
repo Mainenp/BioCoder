@@ -260,3 +260,69 @@ class ChromPeakFormerMultimodalDatasetTests(unittest.TestCase):
                     root / "dataset",
                     target_points=32,
                 )
+
+    def test_internal_test_uses_hash_bound_train_normalization(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            index, readiness, preflight, assets_root = fixture(root)
+            internal_matrix = (
+                assets_root / "jobs" / "internal_test" / "c" / "xic_matrix.npy"
+            )
+            internal_matrix.parent.mkdir(parents=True)
+            rt = np.asarray([0.1, 0.101, 0.5, 0.501, 0.9], dtype=np.float64)
+            np.save(internal_matrix, np.vstack([rt, [0.0, 4.0, 10.0, 9.0, 0.0]]))
+            internal_asset = asset(
+                "asset-internal-test",
+                split="internal_test",
+                job_id="c",
+                matrix_path="jobs/internal_test/c/xic_matrix.npy",
+                peak_label=1,
+            )
+            with index.open("a", encoding="utf-8") as stream:
+                stream.write(json.dumps(internal_asset, separators=(",", ":")) + "\n")
+
+            readiness_payload = json.loads(readiness.read_text(encoding="utf-8"))
+            readiness_payload["asset_index_sha256"] = sha256_file(index)
+            readiness_payload["counts"]["assets"] = 3
+            readiness_payload["counts"]["splits"]["internal_test"] = {"assets": 1}
+            readiness.write_text(json.dumps(readiness_payload), encoding="utf-8")
+            preflight_payload = json.loads(preflight.read_text(encoding="utf-8"))
+            preflight_payload["asset_index_sha256"] = sha256_file(index)
+            preflight_payload["readiness_report_sha256"] = sha256_file(readiness)
+            preflight_payload["counts"]["assets"] = 3
+            preflight.write_text(json.dumps(preflight_payload), encoding="utf-8")
+
+            development = build_multimodal_dataset(
+                index,
+                readiness,
+                preflight,
+                assets_root,
+                root / "development",
+                target_points=32,
+            )
+            normalization = development.output_dir / "scalar_normalization.json"
+            normalization_sha256 = sha256_file(normalization)
+            sealed = build_multimodal_dataset(
+                index,
+                readiness,
+                preflight,
+                assets_root,
+                root / "sealed",
+                include_splits=frozenset({"internal_test"}),
+                target_points=32,
+                scalar_normalization_path=normalization,
+                scalar_normalization_sha256=normalization_sha256,
+            )
+            report = json.loads(sealed.report_path.read_text(encoding="utf-8"))
+            scalars = np.load(sealed.output_dir / "internal_test" / "scalar_features.npy")
+
+        self.assertEqual(scalars.shape, (1, 7))
+        self.assertEqual(report["splits"], ["internal_test"])
+        self.assertEqual(
+            report["frozen_scalar_normalization_sha256"], normalization_sha256
+        )
+        self.assertEqual(
+            report["contracts"]["scalar_normalization"],
+            "frozen-train-zscore-first-six",
+        )
+        self.assertEqual(report["counts"]["by_split"]["internal_test"]["positive"], 1)

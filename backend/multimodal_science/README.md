@@ -904,6 +904,38 @@ artifact manifest. The dossier records rather than hides whether the earlier int
 experiment used the exact selected checkpoint. A mismatch keeps the candidate pre-test-ineligible
 until the four interventions are repeated on the selected checkpoint.
 
+The selected-checkpoint interventions, five-cell matrix, and final development dossier have now
+all passed. Before any sealed record is read, run
+`qwen3vl/slurm/coder_final_benchmark_freeze.sbatch`. The freeze job verifies every development
+manifest, fixes the exact five primary candidates, validation-frozen operating thresholds,
+base-model revision, generation settings, 10,000-resample source-group bootstrap policy, split
+manifest, derivation plan, and train-fitted scalar normalization. It produces a hash-bound protocol
+whose state remains `internal_test_accessed=false`; it cannot open or materialize the test split.
+
+Only after that protocol has been reviewed may
+`qwen3vl/slurm/coder_final_benchmark_run.sbatch` be submitted. The formal job first verifies the
+immutable code revision, protocol, development Dataset, model cache, private detector source tree,
+and GPU guard. It then atomically opens access sequence 1, materializes the 1,815 test assets with
+the already frozen train normalization, creates physically separated prompt and answer roots, and
+evaluates exactly these candidates without model or threshold selection:
+
+- Qwen3-VL zero-shot;
+- Qwen3-VL image-only LoRA;
+- Qwen3-VL image plus aligned XIC;
+- SequencePeakNet; and
+- ChromPeakFormer.
+
+The result contains one language-separated main table, the individual hash-bound evaluation
+reports and source-group intervals, an evidence registry, and an exact manifest. A crash may resume
+only the same protocol and access ID. Completion is idempotent only for the identical final evidence
+manifest; changed evidence or a second access event is rejected. Do not run the formal job as a
+smoke test and do not submit it before the freeze job and native server-side `bash -n` check pass.
+
+This sealed run is explicitly a frozen multimodal-model benchmark. Qwen structured-output and QC
+metrics are included, but they are not a substitute for the separate BioCoder agent gate covering
+tool selection, tool arguments, abstention, trajectory quality, and evidence attribution. No agent
+promotion claim is permitted from the five-model table alone.
+
 The current cluster advertises `Gres=(null)` for its GPU partitions, so Slurm cannot provide a
 GPU TRES reservation for this job. The script records this limitation explicitly and uses a
 user-scoped physical-GPU lock plus three startup samples of memory and utilization. This prevents
@@ -1031,5 +1063,8 @@ failure audit has report SHA-256
 image-only presence and QC outputs, opposite metadata-driven English/Chinese biases, and no useful
 global `0..1000` reinterpretation: horizontal normalization rescued 698 invalid English boxes but
 improved English mean IoU by only `0.0040` while severely degrading Chinese grounding. Full
-baseline training, Qwen3-VL domain training, internal-test extraction, scientific benchmark runs,
-and agent-tool integration remain downstream milestones in `MULTIMODAL_ROADMAP.md`.
+formal baseline training, Qwen3-VL domain training, fusion training, three-seed/token ablations,
+selected-checkpoint causal interventions, and the pre-test development dossier are now complete.
+The one-time frozen model-benchmark protocol is implemented but the sealed internal test remains
+unopened. Server-side protocol freeze, the sole model-benchmark run, and the separate BioCoder
+agent-tool evaluation remain downstream milestones in `MULTIMODAL_ROADMAP.md`.

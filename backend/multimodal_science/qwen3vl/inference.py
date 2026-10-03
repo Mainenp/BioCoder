@@ -61,6 +61,14 @@ class AdapterSpec:
 
 
 @dataclass(frozen=True)
+class FinalBenchmarkAccessSpec:
+    protocol_root: Path
+    protocol_sha256: str
+    ledger_dir: Path
+    candidate_name: str
+
+
+@dataclass(frozen=True)
 class QwenInferenceResult:
     output_dir: Path
     report_path: Path
@@ -69,6 +77,8 @@ class QwenInferenceResult:
     prediction_records: int
     complete_prompt_coverage: bool
     development_comparison_candidate: bool
+    internal_test_accessed: bool = False
+    final_benchmark_candidate: bool = False
 
 
 class BatchGenerator(Protocol):
@@ -538,21 +548,43 @@ def _validate_prompt(record: dict[str, Any]) -> None:
 def _load_bundle(
     bundle_root: Path,
     expected_bundle_report_sha256: str,
+    *,
+    final_access: dict[str, str] | None = None,
 ) -> tuple[dict[str, Any], list[dict[str, Any]], str]:
     report_path = bundle_root / "inference_bundle_report.json"
     report = _read_json(report_path, "inference bundle report")
     report_hash = sha256_file(report_path)
     _require(report_hash == expected_bundle_report_sha256, "Inference bundle hash mismatch")
-    _require(report.get("schema_version") == BUNDLE_SCHEMA, "Unsupported bundle schema")
+    final_mode = final_access is not None
+    expected_schema = (
+        "chrompeak-qwen3vl-final-inference-bundle-v1" if final_mode else BUNDLE_SCHEMA
+    )
+    _require(report.get("schema_version") == expected_schema, "Unsupported bundle schema")
     contracts = _object(report.get("contracts"), "inference bundle contracts")
-    for name, expected in (
-        ("prompt_only", True),
-        ("answer_key_opened", False),
-        ("answer_key_materialized", False),
-        ("internal_test_accessed", False),
-    ):
-        _require(contracts.get(name) is expected, f"Bundle contract failed: {name}")
-    _require(report.get("internal_test_accessed") is False, "Bundle accessed internal test")
+    _require(contracts.get("prompt_only") is True, "Bundle contract failed: prompt_only")
+    if final_mode:
+        _require(
+            contracts.get("answer_key_materialized_in_this_root") is False,
+            "Final prompt root contains an answer key",
+        )
+        _require(report.get("internal_test_accessed") is True, "Final bundle is not test-bound")
+        source = _object(report.get("source"), "final inference source")
+        _require(
+            source.get("protocol_sha256") == final_access["protocol_sha256"],
+            "Final inference protocol drift",
+        )
+        _require(
+            source.get("access_id") == final_access["access_id"],
+            "Final inference access drift",
+        )
+    else:
+        for name, expected in (
+            ("answer_key_opened", False),
+            ("answer_key_materialized", False),
+            ("internal_test_accessed", False),
+        ):
+            _require(contracts.get(name) is expected, f"Bundle contract failed: {name}")
+        _require(report.get("internal_test_accessed") is False, "Bundle accessed internal test")
     artifacts = _object(report.get("artifacts"), "inference bundle artifacts")
     artifact = _object(artifacts.get("inference_prompts"), "inference prompts artifact")
     prompt_path = _safe_child(bundle_root, artifact.get("path"), "inference prompts")
@@ -569,6 +601,112 @@ def _load_bundle(
     ids = [record["instruction_id"] for record in prompts]
     _require(len(set(ids)) == len(ids), "Duplicate inference instruction IDs")
     return report, prompts, expected_hash
+
+
+def _verify_final_inference_access(
+    spec: FinalBenchmarkAccessSpec,
+    *,
+    model_name_or_path: str,
+    model_revision: str,
+    model_artifact_sha256: str | None,
+    adapter: AdapterSpec | None,
+    settings: GenerationSettings,
+) -> dict[str, str]:
+    from multimodal_science.qwen3vl.final_benchmark_protocol import (
+        verify_final_benchmark_access,
+    )
+
+    state = verify_final_benchmark_access(
+        protocol_root=spec.protocol_root,
+        expected_protocol_sha256=spec.protocol_sha256,
+        ledger_dir=spec.ledger_dir,
+    )
+    _require(not state.completed, "Final benchmark access is already completed")
+    _require(
+        spec.candidate_name
+        in {
+            "qwen3vl_zero_shot",
+            "qwen3vl_image_lora",
+            "qwen3vl_image_xic_fusion",
+        },
+        "Unsupported final Qwen candidate",
+    )
+    protocol = _read_json(
+        spec.protocol_root.resolve() / "final_benchmark_protocol.json",
+        "final benchmark protocol",
+    )
+    locks = _object(protocol.get("locks"), "final benchmark locks")
+    candidate_descriptor = _object(locks.get("candidate"), "candidate lock")
+    candidate_path = _safe_child(
+        spec.protocol_root.resolve(), candidate_descriptor.get("path"), "candidate lock"
+    )
+    _require(
+        sha256_file(candidate_path) == candidate_descriptor.get("sha256"),
+        "Candidate lock drift",
+    )
+    candidate_lock = _read_json(candidate_path, "candidate lock")
+    shared = _object(candidate_lock.get("shared"), "candidate shared inputs")
+    base_model = _object(shared.get("base_model"), "candidate base model")
+    _require(
+        base_model.get("name_or_path") == model_name_or_path,
+        "Final base-model path drift",
+    )
+    _require(
+        base_model.get("revision") == model_revision,
+        "Final base-model revision drift",
+    )
+    _require(
+        base_model.get("artifact_sha256") == model_artifact_sha256,
+        "Final base-model artifact drift",
+    )
+    models = _object(candidate_lock.get("models"), "candidate models")
+    selected = _object(models.get(spec.candidate_name), "selected Qwen candidate")
+    policy = _object(shared.get("inference_policy"), "final inference policy")
+    for field in (
+        "batch_size",
+        "max_new_tokens",
+        "do_sample",
+        "temperature",
+        "top_p",
+        "seed",
+        "dtype",
+    ):
+        _require(
+            getattr(settings, field) == policy.get(field),
+            f"Final generation setting drift: {field}",
+        )
+    if spec.candidate_name == "qwen3vl_image_xic_fusion":
+        expected_device_map = policy.get("fusion_device_map")
+        expected_attention = policy.get("fusion_attention_implementation")
+    else:
+        expected_device_map = policy.get("zero_and_lora_device_map")
+        expected_attention = policy.get("zero_and_lora_attention_implementation")
+    _require(settings.device_map == expected_device_map, "Final device-map policy drift")
+    _require(
+        settings.attention_implementation == expected_attention,
+        "Final attention implementation drift",
+    )
+    if spec.candidate_name == "qwen3vl_zero_shot":
+        _require(adapter is None, "Zero-shot final candidate must not load an adapter")
+    else:
+        _require(adapter is not None, "Final adapted Qwen candidate requires its adapter")
+        _require(
+            str(adapter.root.resolve()) == str(Path(str(selected.get("root"))).resolve()),
+            "Final adapter root drift",
+        )
+        _require(
+            adapter.training_report_sha256 == selected.get("training_report_sha256"),
+            "Final adapter training-report drift",
+        )
+        _require(
+            adapter.manifest_sha256 == selected.get("manifest_sha256"),
+            "Final adapter manifest drift",
+        )
+    return {
+        "access_id": state.access_id,
+        "protocol_sha256": spec.protocol_sha256,
+        "candidate_name": spec.candidate_name,
+    }
 
 
 def _journal_records(
@@ -630,6 +768,7 @@ def run_qwen_inference(
     resume: bool = False,
     generator_factory: GeneratorFactory | None = None,
     adapter_verifier: AdapterVerifier | None = None,
+    final_benchmark_access: FinalBenchmarkAccessSpec | None = None,
 ) -> QwenInferenceResult:
     """Generate predictions without accepting an instruction-root or answer-key path."""
 
@@ -664,9 +803,28 @@ def run_qwen_inference(
     if max_records is not None:
         _require(max_records >= 1, "max_records must be positive")
 
+    final_access = (
+        _verify_final_inference_access(
+            final_benchmark_access,
+            model_name_or_path=model_name_or_path,
+            model_revision=model_revision,
+            model_artifact_sha256=model_artifact_sha256,
+            adapter=adapter,
+            settings=settings,
+        )
+        if final_benchmark_access is not None
+        else None
+    )
+    if final_access is not None:
+        _require(
+            max_records is None,
+            "Final benchmark inference requires complete prompt coverage",
+        )
+
     bundle_report, prompts, prompt_artifact_sha256 = _load_bundle(
         bundle_root,
         expected_bundle_report_sha256,
+        final_access=final_access,
     )
     selected_prompts = prompts[:max_records] if max_records is not None else prompts
     complete_prompt_coverage = len(selected_prompts) == len(prompts)
@@ -699,7 +857,8 @@ def run_qwen_inference(
             "input_is_prompt_only_bundle": True,
             "instruction_root_not_accepted": True,
             "answer_key_path_not_accepted": True,
-            "internal_test_accessed": False,
+            "internal_test_accessed": final_access is not None,
+            "final_benchmark_access": final_access,
         },
     }
 
@@ -815,7 +974,7 @@ def run_qwen_inference(
             and bool(_HEX_40_TO_64.fullmatch(resolved_revision))
         )
     )
-    development_candidate = bool(
+    immutable_generation_candidate = bool(
         complete_prompt_coverage
         and runtime_metadata.get("backend") == "transformers"
         and model_identity_immutable
@@ -823,6 +982,12 @@ def run_qwen_inference(
             adapter_metadata is None
             or adapter_metadata["development_training_complete"] is True
         )
+    )
+    development_candidate = bool(
+        final_access is None and immutable_generation_candidate
+    )
+    final_benchmark_candidate = bool(
+        final_access is not None and immutable_generation_candidate
     )
     source = _object(bundle_report.get("source"), "bundle source")
     report_path = work_dir / "generation_report.json"
@@ -842,7 +1007,9 @@ def run_qwen_inference(
                 ),
                 "source_dataset_report_sha256": source.get(
                     "source_dataset_report_sha256"
-                ),
+                ) or source.get("dataset_report_sha256"),
+                "protocol_sha256": source.get("protocol_sha256"),
+                "access_id": source.get("access_id"),
             },
             "model": {
                 "name_or_path": model_name_or_path,
@@ -864,7 +1031,8 @@ def run_qwen_inference(
                 "answer_key_available_to_runner": False,
                 "answer_key_opened": False,
                 "instruction_manifest_available_to_runner": False,
-                "internal_test_accessed": False,
+                "internal_test_accessed": final_access is not None,
+                "final_benchmark_access": final_access,
                 "predictions_preserve_prompt_order": True,
             },
             "artifacts": {
@@ -889,7 +1057,8 @@ def run_qwen_inference(
             },
             "prediction_generation_provenance_available": True,
             "development_comparison_candidate": development_candidate,
-            "internal_test_accessed": False,
+            "final_benchmark_candidate": final_benchmark_candidate,
+            "internal_test_accessed": final_access is not None,
             "final_benchmark_eligible": False,
         },
     )
@@ -905,4 +1074,6 @@ def run_qwen_inference(
         prediction_records=len(predictions),
         complete_prompt_coverage=complete_prompt_coverage,
         development_comparison_candidate=development_candidate,
+        internal_test_accessed=final_access is not None,
+        final_benchmark_candidate=final_benchmark_candidate,
     )

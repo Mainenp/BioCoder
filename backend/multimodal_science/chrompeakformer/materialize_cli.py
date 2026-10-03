@@ -21,6 +21,8 @@ def parser() -> argparse.ArgumentParser:
     argument_parser.add_argument("--output-dir", type=Path, required=True)
     argument_parser.add_argument("--split", action="append", dest="splits")
     argument_parser.add_argument("--target-points", type=int, default=160)
+    argument_parser.add_argument("--scalar-normalization", type=Path)
+    argument_parser.add_argument("--scalar-normalization-sha256")
     return argument_parser
 
 
@@ -46,6 +48,8 @@ def main() -> None:
             else frozenset({"train", "validation"})
         ),
         target_points=arguments.target_points,
+        scalar_normalization_path=arguments.scalar_normalization,
+        scalar_normalization_sha256=arguments.scalar_normalization_sha256,
         progress_callback=report_progress,
     )
     print(

@@ -15,12 +15,13 @@ audit are verified externally. Cross-family comparison is implemented. The answe
 image/XIC bundle and a two-update LoRA-plus-projector CUDA smoke have passed their immutable input,
 forward/backward, serialization, and reload contracts. Full fusion training, same-validation
 fusion evaluation for the canonical seed-17 model, causal XIC intervention analysis, and the full
-five-cell reproducibility/token matrix are complete. Aligned same-validation evaluation and
-provenance-bound aggregation of all five matrix cells are also complete. The remaining
-development gate is materialization of the implemented cross-family development dossier, which
-combines the main table with a hash-bound bilingual/localization failure page and explicitly
-checks whether causal XIC interventions use the exact selected checkpoint. Internal-test
-extraction and all sealed benchmark claims remain incomplete.
+five-cell reproducibility/token matrix are complete. Aligned same-validation evaluation,
+provenance-bound aggregation of all five matrix cells, the selected-checkpoint causal
+interventions, and the cross-family development dossier are complete. The dossier's pre-test gate
+passes. A one-time five-candidate model-benchmark protocol, access ledger, separated test-data
+views, frozen evaluators, final table, and evidence registry are implemented and under final code
+verification. The sealed internal test has not been opened. BioCoder agent integration and its T24
+tool/abstention/evidence evaluation remain a separate promotion gate.
 
 ## Verified Phase A snapshot
 
@@ -349,7 +350,8 @@ every cell, and `coder_analyze_fusion_matrix.sbatch` published metric recomputat
 mean/sample-SD, bilingual consistency, token-count deltas, and the gate audit. The next
 implemented gate is `coder_build_development_dossier.sbatch`, which joins that matrix with the
 earlier cross-family and causal-intervention evidence and emits the frozen main table plus
-bilingual/localization failure cases. Internal test remains sealed.
+bilingual/localization failure cases. That dossier and the exact-selected-checkpoint intervention
+reruns are now complete; its pre-internal-test readiness gate passes. Internal test remains sealed.
 
 Four additional vendor containers are now admitted only through an auxiliary-unlabeled contract.
 They comprise four independent source groups, 77 converted acquisition frames, and 1,610 transition
@@ -392,6 +394,14 @@ Agent evaluation:
 - Evidence-attribution completeness.
 
 A candidate cannot be promoted without both scientific and agent evidence.
+
+The implemented one-time final protocol covers the scientific/model half of this phase. It freezes
+five candidates (zero-shot, image LoRA, image+XIC, SequencePeakNet, and ChromPeakFormer), all
+operating thresholds, decoding settings, provenance hashes, and source-group bootstrap policy
+before access. The freeze job cannot read test rows. The formal job may create access sequence 1
+only after all immutable-input and GPU checks pass, and an infrastructure failure may resume only
+that exact protocol. Its final eligibility flag applies to the five-model benchmark, not to the
+BioCoder agent promotion gate. T24 agent metrics must still be produced separately.
 
 ### Phase 9 — Reproducible public artifacts
 
