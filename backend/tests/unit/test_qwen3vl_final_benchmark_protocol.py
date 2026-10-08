@@ -8,6 +8,7 @@ from pathlib import Path
 
 from multimodal_science.qwen3vl.final_benchmark_protocol import (
     FINAL_BENCHMARK_PROTOCOL_SCHEMA,
+    _requested_model_revision,
     complete_final_benchmark_access,
     freeze_final_benchmark_protocol,
     open_final_benchmark_access,
@@ -188,7 +189,7 @@ class _ProtocolFixture:
                 "internal_test_accessed": False,
                 "model": {
                     "name_or_path": "Qwen/Qwen3-VL-4B-Instruct",
-                    "revision": "modelscope-master",
+                    "requested_revision": "modelscope-master",
                     "artifact_sha256": self.model_artifact_sha256,
                 },
             },
@@ -200,7 +201,7 @@ class _ProtocolFixture:
                 "internal_test_accessed": False,
                 "model": {
                     "name_or_path": "Qwen/Qwen3-VL-4B-Instruct",
-                    "revision": "modelscope-master",
+                    "requested_revision": "modelscope-master",
                     "artifact_sha256": self.model_artifact_sha256,
                     "adapter": {
                         "root": str(lora_root),
@@ -380,6 +381,26 @@ class _ProtocolFixture:
 
 
 class FinalBenchmarkProtocolTests(unittest.TestCase):
+    def test_reads_current_and_legacy_model_revision_without_ambiguity(self) -> None:
+        self.assertEqual(
+            _requested_model_revision(
+                {"requested_revision": "modelscope-master"}, "current"
+            ),
+            "modelscope-master",
+        )
+        self.assertEqual(
+            _requested_model_revision({"revision": "legacy-revision"}, "legacy"),
+            "legacy-revision",
+        )
+        with self.assertRaisesRegex(ValueError, "fields disagree"):
+            _requested_model_revision(
+                {
+                    "requested_revision": "modelscope-master",
+                    "revision": "different-revision",
+                },
+                "conflicting",
+            )
+
     def test_freezes_candidates_thresholds_and_metrics_without_opening_labels(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             fixture = _ProtocolFixture(Path(temporary))
@@ -396,6 +417,9 @@ class FinalBenchmarkProtocolTests(unittest.TestCase):
             )
             self.assertFalse(report["biocoder_agent_promotion_claimed"])
             self.assertFalse(report["sealed_split"]["labels_opened_while_freezing_protocol"])
+            self.assertEqual(
+                candidates["shared"]["base_model"]["revision"], "modelscope-master"
+            )
             self.assertEqual(
                 candidates["models"]["sequence_peak_net"]["frozen_threshold"]["value"],
                 0.32,

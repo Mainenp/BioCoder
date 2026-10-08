@@ -115,6 +115,29 @@ def _hex64(value: Any, description: str) -> str:
     return value
 
 
+def _requested_model_revision(model: dict[str, Any], description: str) -> str:
+    """Read the immutable requested revision from current or legacy reports."""
+
+    requested = model.get("requested_revision")
+    legacy = model.get("revision")
+    if requested is not None:
+        _require(
+            isinstance(requested, str) and bool(requested.strip()),
+            f"{description} requested model revision is invalid",
+        )
+        if legacy is not None:
+            _require(
+                isinstance(legacy, str) and legacy == requested,
+                f"{description} model revision fields disagree",
+            )
+        return requested
+    _require(
+        isinstance(legacy, str) and bool(legacy.strip()),
+        f"{description} model revision is missing",
+    )
+    return legacy
+
+
 def _finite_probability(value: Any, description: str) -> float:
     _require(
         isinstance(value, (int, float)) and not isinstance(value, bool),
@@ -331,9 +354,11 @@ def _candidate_lock(
         _require(model.get("artifact_sha256") == base_model_sha256, f"{label} model drift")
     zero_model = _object(zero_generation.get("model"), "zero-shot generation model")
     lora_model = _object(lora_generation.get("model"), "LoRA generation model")
-    model_revision = str(zero_model.get("revision") or "")
-    _require(bool(model_revision), "Zero-shot model revision is missing")
-    _require(lora_model.get("revision") == model_revision, "Qwen model revision drift")
+    model_revision = _requested_model_revision(zero_model, "Zero-shot")
+    _require(
+        _requested_model_revision(lora_model, "Image-LoRA") == model_revision,
+        "Qwen model revision drift",
+    )
     _require(
         fusion_model.get("revision") == model_revision,
         "Fusion base-model revision drift",
