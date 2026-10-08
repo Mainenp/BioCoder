@@ -14,6 +14,7 @@ from multimodal_science.baselines.final_sequence_evaluation import (
 )
 from multimodal_science.chrompeakformer.final_detector_evaluation import (
     FINAL_DETECTOR_EVALUATION_SCHEMA,
+    _manifest_entries as _detector_manifest_entries,
     _source_tree_sha256,
     evaluate_final_detector_candidate,
 )
@@ -276,8 +277,8 @@ class _FinalDataFixture:
         _write_manifest(
             detector_root,
             [
-                "training/checkpoint.pth",
-                "training/detector_training_report.json",
+                "./training/checkpoint.pth",
+                "./training/detector_training_report.json",
             ],
         )
 
@@ -709,6 +710,25 @@ class FinalBenchmarkDataTests(unittest.TestCase):
             self.assertFalse(report["evaluation"]["threshold_selection_performed"])
             self.assertEqual(report["evaluation"]["bootstrap_iterations"], 10_000)
             self.assertTrue(report["final_benchmark_eligible"])
+
+    def test_detector_manifest_rejects_duplicate_normalized_paths(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            checkpoint = root / "training" / "checkpoint.pth"
+            checkpoint.parent.mkdir()
+            checkpoint.write_bytes(b"checkpoint")
+            digest = _sha256(checkpoint)
+            manifest = root / "artifact_manifest.sha256"
+            manifest.write_text(
+                f"{digest}  training/checkpoint.pth\n"
+                f"{digest}  ./training/checkpoint.pth\n",
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(
+                ValueError, "Duplicate normalized detector manifest path"
+            ):
+                _detector_manifest_entries(root, _sha256(manifest))
 
     def test_final_report_requires_all_five_candidates_from_one_access_event(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
