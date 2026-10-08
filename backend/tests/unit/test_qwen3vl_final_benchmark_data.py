@@ -77,11 +77,13 @@ class _FinalDataFixture:
         self.protocol_root = root / "protocol"
         self.ledger = root / "ledger"
         self.dataset_root = root / "dataset"
+        self.training_dataset_root = root / "training-dataset"
         self.assets_root = root / "assets"
         self.output = root / "final-data"
         self.normalization_sha = ""
         self.protocol_sha = ""
         self.dataset_sha = ""
+        self.training_dataset_sha = ""
         self._build()
 
     def _example(self, row: int, *, present: bool) -> dict:
@@ -129,19 +131,35 @@ class _FinalDataFixture:
                 "coordinate_system": "roi_fraction_0_1",
                 "supervision_source": "human",
             },
-            "provenance": {"asset_index_sha256": "a" * 64},
+            "provenance": {"asset_index_sha256": "b" * 64},
         }
 
     def _build(self) -> None:
+        normalization_payload = {
+            "schema_version": "chrompeak-scalar-normalization-v1",
+            "fit_split": "train",
+        }
         normalization = self.dataset_root / "scalar_normalization.json"
+        _write_json(normalization, normalization_payload)
+        self.normalization_sha = _sha256(normalization)
+        training_normalization = self.training_dataset_root / "scalar_normalization.json"
+        _write_json(training_normalization, normalization_payload)
+        training_report = self.training_dataset_root / "dataset_report.json"
         _write_json(
-            normalization,
+            training_report,
             {
-                "schema_version": "chrompeak-scalar-normalization-v1",
-                "fit_split": "train",
+                "schema_version": "chrompeak-multimodal-dataset-v1",
+                "asset_index_sha256": "a" * 64,
+                "splits": ["train", "validation"],
+                "artifacts": {
+                    "scalar_normalization": {
+                        "path": training_normalization.name,
+                        "sha256": self.normalization_sha,
+                    }
+                },
             },
         )
-        self.normalization_sha = _sha256(normalization)
+        self.training_dataset_sha = _sha256(training_report)
         examples = [self._example(0, present=True), self._example(1, present=False)]
         arrays = {
             "internal_test/signals.npy": np.vstack(
@@ -166,7 +184,7 @@ class _FinalDataFixture:
             report_path,
             {
                 "schema_version": "chrompeak-multimodal-dataset-v1",
-                "asset_index_sha256": "a" * 64,
+                "asset_index_sha256": "b" * 64,
                 "target_points": 160,
                 "splits": ["internal_test"],
                 "frozen_scalar_normalization_sha256": self.normalization_sha,
@@ -227,6 +245,8 @@ class _FinalDataFixture:
                 "selected_on_split": "validation",
                 "objective": "macro_f1",
                 "threshold": 0.5,
+                "dataset_report_sha256": self.training_dataset_sha,
+                "asset_index_sha256": "a" * 64,
                 "internal_test_accessed": False,
             },
         )
@@ -238,6 +258,10 @@ class _FinalDataFixture:
                 "development_comparison_eligible": True,
                 "internal_test_accessed": False,
                 "config": {"modality": "sequence"},
+                "dataset": {
+                    "dataset_report_sha256": self.training_dataset_sha,
+                    "asset_index_sha256": "a" * 64,
+                },
             },
         )
         _write_manifest(
@@ -298,6 +322,8 @@ class _FinalDataFixture:
                     "chrompeakformer",
                 ],
                 "shared": {
+                    "dataset_root": str(self.training_dataset_root),
+                    "dataset_report_sha256": self.training_dataset_sha,
                     "base_model": {
                         "name_or_path": "fixture-model",
                         "revision": "fixture-revision",
@@ -601,6 +627,7 @@ class FinalBenchmarkDataTests(unittest.TestCase):
                 self.assertEqual(path.name, "best_model.pt")
                 return {
                     "schema_version": "chrompeak-sequence-baseline-checkpoint-v1",
+                    "dataset_report_sha256": fixture.training_dataset_sha,
                     "asset_index_sha256": "a" * 64,
                     "model_spec": {
                         "input_points": 160,
@@ -644,7 +671,59 @@ class FinalBenchmarkDataTests(unittest.TestCase):
             self.assertEqual(report["localization"]["mean_iou"], 1.0)
             self.assertFalse(report["evaluation"]["threshold_selection_performed"])
             self.assertEqual(report["evaluation"]["bootstrap_iterations"], 10_000)
+            self.assertEqual(
+                report["provenance"]["training_dataset_report_sha256"],
+                fixture.training_dataset_sha,
+            )
+            self.assertEqual(
+                report["provenance"]["training_asset_index_sha256"], "a" * 64
+            )
+            self.assertEqual(
+                report["provenance"]["internal_test_asset_index_sha256"],
+                "b" * 64,
+            )
             self.assertTrue(report["final_benchmark_eligible"])
+
+    def test_final_sequence_rejects_checkpoint_from_another_training_index(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            fixture = _FinalDataFixture(Path(temporary))
+            fixture.build()
+
+            def load_checkpoint(path):
+                self.assertEqual(path.name, "best_model.pt")
+                return {
+                    "schema_version": "chrompeak-sequence-baseline-checkpoint-v1",
+                    "dataset_report_sha256": fixture.training_dataset_sha,
+                    "asset_index_sha256": "c" * 64,
+                    "model_spec": {
+                        "input_points": 160,
+                        "scalar_features": 7,
+                        "modality": "sequence",
+                        "base_channels": 32,
+                        "position_bins": 10,
+                        "dropout": 0.15,
+                    },
+                    "model_state_dict": {},
+                }
+
+            with self.assertRaisesRegex(
+                ValueError, "Checkpoint is not bound to the frozen training asset index"
+            ):
+                evaluate_final_sequence_candidate(
+                    protocol_root=fixture.protocol_root,
+                    expected_protocol_sha256=fixture.protocol_sha,
+                    ledger_dir=fixture.ledger,
+                    candidate_name="sequence_peak_net",
+                    dataset_root=fixture.dataset_root,
+                    expected_dataset_report_sha256=fixture.dataset_sha,
+                    output_dir=fixture.root / "sequence-final",
+                    device="cpu",
+                    batch_size=2,
+                    checkpoint_loader=load_checkpoint,
+                    predictor=lambda *args: (_ for _ in ()).throw(
+                        AssertionError("predictor must not run")
+                    ),
+                )
 
     def test_final_detector_evaluation_uses_the_frozen_candidate_and_threshold(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

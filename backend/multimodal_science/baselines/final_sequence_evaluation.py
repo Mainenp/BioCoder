@@ -139,7 +139,7 @@ def _candidate(
 
 def _verify_candidate_artifacts(
     candidate: dict[str, Any], candidate_name: str
-) -> tuple[Path, Path, float]:
+) -> tuple[Path, Path, Path, float]:
     root = Path(str(candidate.get("root") or "")).resolve()
     _require(root.is_dir(), f"Candidate root not found: {root}")
     entries = _manifest_entries(root, str(candidate.get("manifest_sha256") or ""))
@@ -183,7 +183,55 @@ def _verify_candidate_artifacts(
     frozen = float(threshold.get("value"))
     _require(math.isfinite(frozen) and 0.0 <= frozen <= 1.0, "Invalid frozen threshold")
     _require(float(threshold_payload.get("threshold")) == frozen, "Threshold value drift")
-    return checkpoint_path, report_path, frozen
+    return checkpoint_path, report_path, threshold_path, frozen
+
+
+def _verify_training_data_lineage(
+    context: FinalBenchmarkRuntimeContext,
+    *,
+    checkpoint: dict[str, Any],
+    candidate_report_path: Path,
+    threshold_path: Path,
+) -> str:
+    shared = _object(context.candidate_lock.get("shared"), "shared candidate inputs")
+    training_root = Path(str(shared.get("dataset_root") or "")).resolve()
+    training_report_path = training_root / "dataset_report.json"
+    expected_report_sha256 = shared.get("dataset_report_sha256")
+    _require(
+        isinstance(expected_report_sha256, str)
+        and bool(_HEX_64.fullmatch(expected_report_sha256)),
+        "Frozen training Dataset report hash is invalid",
+    )
+    _require(
+        training_report_path.is_file()
+        and sha256_file(training_report_path) == expected_report_sha256,
+        "Frozen training Dataset report drift",
+    )
+    training_dataset = _read_json(training_report_path, "frozen training Dataset report")
+    training_asset_index_sha256 = training_dataset.get("asset_index_sha256")
+    _require(
+        isinstance(training_asset_index_sha256, str)
+        and bool(_HEX_64.fullmatch(training_asset_index_sha256)),
+        "Frozen training asset-index hash is invalid",
+    )
+
+    candidate_report = _read_json(candidate_report_path, "sequence training report")
+    candidate_dataset = _object(candidate_report.get("dataset"), "sequence training Dataset")
+    threshold = _read_json(threshold_path, "frozen sequence threshold")
+    for payload, label in (
+        (checkpoint, "Checkpoint"),
+        (candidate_dataset, "Sequence training report"),
+        (threshold, "Frozen threshold"),
+    ):
+        _require(
+            payload.get("dataset_report_sha256") == expected_report_sha256,
+            f"{label} is not bound to the frozen training Dataset report",
+        )
+        _require(
+            payload.get("asset_index_sha256") == training_asset_index_sha256,
+            f"{label} is not bound to the frozen training asset index",
+        )
+    return training_asset_index_sha256
 
 
 def _metrics_contract(context: FinalBenchmarkRuntimeContext) -> tuple[int, int]:
@@ -335,10 +383,20 @@ def evaluate_final_sequence_candidate(
         ledger_dir=ledger_dir,
     )
     candidate = _candidate(context, candidate_name)
-    checkpoint_path, report_path, threshold = _verify_candidate_artifacts(
+    checkpoint_path, report_path, threshold_path, threshold = _verify_candidate_artifacts(
         candidate, candidate_name
     )
     iterations, seed = _metrics_contract(context)
+    loader = checkpoint_loader or _load_checkpoint
+    checkpoint = loader(checkpoint_path)
+    _require(checkpoint.get("schema_version") == CHECKPOINT_SCHEMA, "Bad checkpoint schema")
+    training_asset_index_sha256 = _verify_training_data_lineage(
+        context,
+        checkpoint=checkpoint,
+        candidate_report_path=report_path,
+        threshold_path=threshold_path,
+    )
+
     dataset_root = dataset_root.resolve()
     dataset_report_path = dataset_root / "dataset_report.json"
     _require(
@@ -366,12 +424,9 @@ def evaluate_final_sequence_candidate(
         "Internal-test source-group count drift",
     )
 
-    loader = checkpoint_loader or _load_checkpoint
-    checkpoint = loader(checkpoint_path)
-    _require(checkpoint.get("schema_version") == CHECKPOINT_SCHEMA, "Bad checkpoint schema")
     _require(
-        checkpoint.get("asset_index_sha256") == split.asset_index_sha256,
-        "Checkpoint and internal-test asset index disagree",
+        training_asset_index_sha256 != split.asset_index_sha256,
+        "Training and internal-test asset indices must be distinct",
     )
     spec = SequenceModelSpec(**_object(checkpoint.get("model_spec"), "model spec"))
     expected_modality = (
@@ -490,6 +545,11 @@ def evaluate_final_sequence_candidate(
                     "protocol_sha256": expected_protocol_sha256,
                     "access_id": context.access_id,
                     "dataset_report_sha256": expected_dataset_report_sha256,
+                    "internal_test_asset_index_sha256": split.asset_index_sha256,
+                    "training_dataset_report_sha256": _object(
+                        context.candidate_lock.get("shared"), "shared candidate inputs"
+                    ).get("dataset_report_sha256"),
+                    "training_asset_index_sha256": training_asset_index_sha256,
                     "candidate_report_sha256": candidate.get("report_sha256"),
                     "candidate_report_path": str(report_path),
                     "candidate_manifest_sha256": candidate.get("manifest_sha256"),
