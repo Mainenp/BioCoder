@@ -1067,6 +1067,11 @@ global `0..1000` reinterpretation: horizontal normalization rescued 698 invalid 
 improved English mean IoU by only `0.0040` while severely degrading Chinese grounding. Full
 formal baseline training, Qwen3-VL domain training, fusion training, three-seed/token ablations,
 selected-checkpoint causal interventions, and the pre-test development dossier are now complete.
-The one-time frozen model-benchmark protocol is implemented but the sealed internal test remains
-unopened. Server-side protocol freeze, the sole model-benchmark run, and the separate BioCoder
-agent-tool evaluation remain downstream milestones in `MULTIMODAL_ROADMAP.md`.
+The five-candidate protocol has been frozen and its sole internal-test access event has been opened.
+If infrastructure fails after that point, the runner permits only an exact-protocol crash resume:
+it verifies the existing access ledger, executes only the frozen plan's `internal_test` jobs from
+the explicitly configured `BIOCODER_RAW_DATA_ROOT`, builds a separate complete test-only asset
+index beneath that protocol's isolated final-run root, and applies the train-frozen scalar
+normalization. Refreezing candidates, thresholds,
+metrics, or a second access event is forbidden. Completion of the sole model-benchmark run and the
+separate BioCoder agent-tool evaluation remain downstream milestones in `MULTIMODAL_ROADMAP.md`.

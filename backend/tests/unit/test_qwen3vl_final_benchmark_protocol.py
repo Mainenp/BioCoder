@@ -541,6 +541,9 @@ class FinalBenchmarkProtocolTests(unittest.TestCase):
         access_open = run_script.index("final_benchmark_access_cli open")
         preflight = run_script.index("FROZEN_RUNTIME_INPUTS=OK")
         gpu_guard = run_script.index("=== GPU STARTUP GUARD ===")
+        frozen_derivation = run_script.index(
+            "=== DERIVE SEALED INTERNAL TEST FROM FROZEN PLAN ==="
+        )
         data_materialization = run_script.index(
             "=== MATERIALIZE INTERNAL TEST WITH FROZEN TRAIN NORMALIZATION ==="
         )
@@ -548,11 +551,23 @@ class FinalBenchmarkProtocolTests(unittest.TestCase):
         access_complete = run_script.rindex("final_benchmark_access_cli complete")
         self.assertLess(preflight, gpu_guard)
         self.assertLess(gpu_guard, access_open)
-        self.assertLess(access_open, data_materialization)
+        self.assertLess(access_open, frozen_derivation)
+        self.assertLess(frozen_derivation, data_materialization)
         self.assertLess(data_materialization, report)
         self.assertLess(report, access_complete)
         self.assertEqual(run_script.count("final_benchmark_access_cli open"), 1)
         self.assertEqual(run_script.count("final_benchmark_access_cli complete"), 2)
+        self.assertIn("BIOCODER_RAW_DATA_ROOT", run_script)
+        self.assertIn("sha256_file(derivation_plan)", run_script)
+        self.assertIn("FROZEN_INTERNAL_TEST_EXTRACTION=OK", run_script)
+        self.assertIn("INTERNAL_TEST_ASSET_CHAIN=OK", run_script)
+        self.assertIn('--index "$internal_asset_index"', run_script)
+        self.assertNotIn('--index "$asset_index"', run_script)
+        self.assertIn(
+            'internal_assets_root="$final_root/internal-test-assets"', run_script
+        )
+        self.assertIn('--output-root "$internal_assets_root"', run_script)
+        self.assertNotIn('--output-root "$assets_root"', run_script)
         for candidate in (
             "qwen3vl_zero_shot",
             "qwen3vl_image_lora",

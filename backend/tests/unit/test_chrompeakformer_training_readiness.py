@@ -155,6 +155,64 @@ class ChromPeakFormerTrainingReadinessTests(unittest.TestCase):
                     index, index_report, root / "training_readiness.json"
                 )
 
+    def test_complete_internal_test_only_index_can_be_audited_after_access(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            positive = asset(
+                "asset-internal-positive",
+                split="internal_test",
+                job_id="job-internal-a",
+                source_sha256="1" * 64,
+                peak_label=1,
+            )
+            negative = asset(
+                "asset-internal-negative",
+                split="internal_test",
+                job_id="job-internal-b",
+                source_sha256="2" * 64,
+                peak_label=0,
+            )
+            negative["image"]["id"] = 303
+            index = root / "asset_index.jsonl"
+            index.write_text(
+                "".join(
+                    json.dumps(record, separators=(",", ":")) + "\n"
+                    for record in (positive, negative)
+                ),
+                encoding="utf-8",
+            )
+            index_report = root / "asset_index_report.json"
+            index_report.write_text(
+                json.dumps(
+                    {
+                        "schema_version": "chrompeak-asset-index-report-v1",
+                        "plan_sha256": PLAN_SHA256,
+                        "asset_index_sha256": sha256_file(index),
+                        "partial": False,
+                        "counts": {
+                            "assets": 2,
+                            "positive_assets": 1,
+                            "negative_assets": 1,
+                            "annotations": 1,
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            result = build_training_readiness_report(
+                index,
+                index_report,
+                root / "internal_test_readiness.json",
+                required_splits=frozenset({"internal_test"}),
+            )
+            report = json.loads(result.report_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(result.splits, ("internal_test",))
+        self.assertEqual(report["counts"]["splits"]["internal_test"]["assets"], 2)
+        self.assertEqual(report["coverage"]["train_components"], 0)
+        self.assertEqual(report["coverage"]["validation_components"], 0)
+
     def test_tampered_index_is_rejected_by_hash(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

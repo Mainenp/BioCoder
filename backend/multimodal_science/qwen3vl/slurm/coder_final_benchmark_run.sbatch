@@ -30,6 +30,7 @@ for required_name in \
   BIOCODER_READINESS_REPORT_PATH \
   BIOCODER_SEQUENCE_PREFLIGHT_PATH \
   BIOCODER_ASSETS_ROOT \
+  BIOCODER_RAW_DATA_ROOT \
   BIOCODER_PRIVATE_DETECTOR_SOURCE
 do
   require_variable "$required_name"
@@ -45,7 +46,9 @@ asset_index="$BIOCODER_ASSET_INDEX_PATH"
 readiness_report="$BIOCODER_READINESS_REPORT_PATH"
 sequence_preflight="$BIOCODER_SEQUENCE_PREFLIGHT_PATH"
 assets_root="$BIOCODER_ASSETS_ROOT"
+raw_data_root="$BIOCODER_RAW_DATA_ROOT"
 private_detector_source="$BIOCODER_PRIVATE_DETECTOR_SOURCE"
+extraction_python="${BIOCODER_EXTRACTION_PYTHON:-$python_bin}"
 gpu_index="${BIOCODER_GPU_INDEX:-auto}"
 max_gpu_used_mib="${BIOCODER_MAX_GPU_USED_MIB:-512}"
 max_gpu_utilization="${BIOCODER_MAX_GPU_UTILIZATION:-10}"
@@ -61,9 +64,11 @@ ledger_dir="$run_root/final-benchmark/access/access-$protocol_short"
 [[ "$max_gpu_used_mib" =~ ^[0-9]+$ ]]
 [[ "$max_gpu_utilization" =~ ^[0-9]+$ ]]
 test -x "$python_bin"
+test -x "$extraction_python"
 test -d "$repo_root/.git"
 test -d "$protocol_root"
 test -d "$assets_root"
+test -d "$raw_data_root"
 test -d "$private_detector_source"
 for path in "$asset_index" "$readiness_report" "$sequence_preflight"; do
   test -f "$path"
@@ -172,6 +177,23 @@ models = candidate["models"]
 _verify_candidate(models["chrompeakformer"], private_source)
 policy = shared["inference_policy"]
 
+derivation = protocol["derivation"]
+derivation_plan = Path(derivation["plan_path"]).resolve()
+derivation_report_path = Path(derivation["report_path"]).resolve()
+if sha256_file(derivation_plan) != derivation["plan_sha256"]:
+    raise RuntimeError("Frozen derivation-plan drift")
+if sha256_file(derivation_report_path) != derivation["report_sha256"]:
+    raise RuntimeError("Frozen derivation-report drift")
+derivation_report = json.loads(derivation_report_path.read_text(encoding="utf-8"))
+if derivation_report.get("derivation_plan_sha256") != derivation["plan_sha256"]:
+    raise RuntimeError("Frozen derivation report does not bind its plan")
+if derivation.get("execution_split") != "internal_test":
+    raise RuntimeError("Frozen derivation split is not internal_test")
+
+sealed = protocol["sealed_split"]
+if sealed.get("name") != "internal_test":
+    raise RuntimeError("Frozen benchmark split is not internal_test")
+
 values = (
     str(model_root),
     base_model["revision"],
@@ -189,6 +211,10 @@ values = (
     policy["fusion_attention_implementation"],
     str(dataset_root),
     shared["dataset_report_sha256"],
+    str(derivation_plan),
+    derivation["plan_sha256"],
+    str(sealed["expected_assets"]),
+    str(sealed["expected_source_groups"]),
 )
 for value in values:
     if "\n" in str(value):
@@ -196,7 +222,7 @@ for value in values:
     print(value)
 PY
 )
-[[ "${#locked[@]}" -eq 16 ]] || {
+[[ "${#locked[@]}" -eq 20 ]] || {
   echo "Unexpected frozen-runtime field count: ${#locked[@]}" >&2
   exit 3
 }
@@ -216,6 +242,10 @@ fusion_manifest_sha256="${locked[12]}"
 fusion_attention="${locked[13]}"
 development_dataset_root="${locked[14]}"
 development_dataset_sha256="${locked[15]}"
+derivation_plan="${locked[16]}"
+derivation_plan_sha256="${locked[17]}"
+expected_internal_assets="${locked[18]}"
+expected_internal_groups="${locked[19]}"
 
 echo "MODEL_ARTIFACT_SHA256=$model_artifact_sha256"
 echo "MODEL_MANIFEST_SHA256=$model_manifest_sha256"
@@ -223,6 +253,28 @@ echo "DEVELOPMENT_DATASET_SHA256=$development_dataset_sha256"
 echo "PRIVATE_DETECTOR_SOURCE_CONTRACT=OK"
 echo "FROZEN_RUNTIME_INPUTS=OK"
 echo "PRE_ACCESS_TEST_ROWS_PARSED=false"
+
+echo "=== EXTRACTION RUNTIME PREFLIGHT ==="
+export CHROMPEAKFORMER_SOURCE_ROOT="$private_detector_source"
+export CHROMPEAKFORMER_SMOOTH_SIGMA=1.0
+export MPLBACKEND=Agg
+"$extraction_python" - <<'PY'
+import importlib.util
+
+required = ("numpy", "pandas", "scipy", "matplotlib", "natsort", "pyopenms")
+missing = [name for name in required if importlib.util.find_spec(name) is None]
+if missing:
+    raise SystemExit(f"Missing frozen-extraction dependencies: {missing}")
+print("EXTRACTION_DEPENDENCIES=OK", flush=True)
+PY
+"$extraction_python" - <<'PY' > "$scratch/private-source-preflight.json"
+import json
+
+from multimodal_science.chrompeakformer.private_adapter import preflight_private_source
+
+print(json.dumps(preflight_private_source(), ensure_ascii=False), flush=True)
+PY
+echo "PRIVATE_EXTRACTION_SOURCE_PREFLIGHT=OK"
 
 verify_manifest() {
   local root="$1"
@@ -315,17 +367,115 @@ else
 fi
 
 mkdir -p "$final_root"
+internal_assets_root="$final_root/internal-test-assets"
 internal_dataset="$final_root/internal-test-dataset"
+internal_preparation="$final_root/internal-test-preparation"
 final_data="$final_root/separated-data"
+
+echo "=== DERIVE SEALED INTERNAL TEST FROM FROZEN PLAN ==="
+mkdir -p "$internal_assets_root" "$internal_preparation/index"
+"$extraction_python" -m multimodal_science.chrompeakformer.execute_cli \
+  --plan "$derivation_plan" \
+  --data-root "$raw_data_root" \
+  --output-root "$internal_assets_root" \
+  --extractor "multimodal_science.chrompeakformer.private_adapter:extract_job" \
+  --split internal_test
+echo "FROZEN_INTERNAL_TEST_EXTRACTION=OK"
+
+"$python_bin" -m multimodal_science.chrompeakformer.index_cli \
+  --plan "$derivation_plan" \
+  --assets-root "$internal_assets_root" \
+  --output-dir "$internal_preparation/index" \
+  --split internal_test
+
+internal_asset_index="$internal_preparation/index/asset_index.jsonl"
+internal_asset_index_report="$internal_preparation/index/asset_index_report.json"
+internal_readiness="$internal_preparation/training_readiness.json"
+internal_sequence_preflight="$internal_preparation/sequence_preflight.json"
+
+"$python_bin" -m multimodal_science.chrompeakformer.readiness_cli \
+  --index "$internal_asset_index" \
+  --index-report "$internal_asset_index_report" \
+  --output "$internal_readiness" \
+  --required-split internal_test
+
+"$python_bin" -m multimodal_science.chrompeakformer.sequence_preflight_cli \
+  --index "$internal_asset_index" \
+  --readiness-report "$internal_readiness" \
+  --assets-root "$internal_assets_root" \
+  --output "$internal_sequence_preflight"
+
+"$python_bin" - \
+  "$internal_asset_index" "$internal_asset_index_report" \
+  "$internal_readiness" "$internal_sequence_preflight" \
+  "$derivation_plan_sha256" "$expected_internal_assets" \
+  "$expected_internal_groups" <<'PY'
+import json
+import re
+import sys
+from pathlib import Path
+
+from multimodal_science.data.manifest import sha256_file
+
+index_path = Path(sys.argv[1])
+index_report_path = Path(sys.argv[2])
+readiness_path = Path(sys.argv[3])
+preflight_path = Path(sys.argv[4])
+plan_sha256 = sys.argv[5]
+expected_assets = int(sys.argv[6])
+expected_groups = int(sys.argv[7])
+
+rows = [json.loads(line) for line in index_path.read_text(encoding="utf-8").splitlines() if line]
+if len(rows) != expected_assets:
+    raise RuntimeError(f"Expected {expected_assets} internal-test assets, found {len(rows)}")
+if {row.get("split") for row in rows} != {"internal_test"}:
+    raise RuntimeError("Internal-test asset index contains another split")
+if {row.get("plan_sha256") for row in rows} != {plan_sha256}:
+    raise RuntimeError("Internal-test assets do not bind the frozen derivation plan")
+groups = {row.get("job_id") for row in rows}
+if len(groups) != expected_groups or None in groups:
+    raise RuntimeError(
+        f"Expected {expected_groups} internal-test source groups, found {len(groups)}"
+    )
+private_hashes = {
+    (row.get("extractor") or {}).get("private_code_sha256") for row in rows
+}
+private_hash = next(iter(private_hashes), "")
+if len(private_hashes) != 1 or not re.fullmatch(r"[0-9a-f]{64}", private_hash):
+    raise RuntimeError("Internal-test assets do not share one valid private-source hash")
+
+index_report = json.loads(index_report_path.read_text(encoding="utf-8"))
+if index_report.get("partial") is not False:
+    raise RuntimeError("Internal-test asset index is partial")
+if index_report.get("selection") != {"splits": ["internal_test"]}:
+    raise RuntimeError("Internal-test asset-index selection drift")
+if index_report.get("plan_sha256") != plan_sha256:
+    raise RuntimeError("Internal-test index report does not bind the frozen plan")
+if index_report.get("asset_index_sha256") != sha256_file(index_path):
+    raise RuntimeError("Internal-test index report hash mismatch")
+
+readiness = json.loads(readiness_path.read_text(encoding="utf-8"))
+preflight = json.loads(preflight_path.read_text(encoding="utf-8"))
+if readiness.get("asset_index_sha256") != sha256_file(index_path):
+    raise RuntimeError("Internal-test readiness does not bind its index")
+if preflight.get("asset_index_sha256") != sha256_file(index_path):
+    raise RuntimeError("Internal-test sequence preflight does not bind its index")
+if preflight.get("readiness_report_sha256") != sha256_file(readiness_path):
+    raise RuntimeError("Internal-test sequence preflight does not bind readiness")
+print("INTERNAL_TEST_ASSET_CHAIN=OK", flush=True)
+print(f"INTERNAL_TEST_ASSETS={len(rows)}", flush=True)
+print(f"INTERNAL_TEST_SOURCE_GROUPS={len(groups)}", flush=True)
+print(f"INTERNAL_TEST_PRIVATE_SOURCE_SHA256={private_hash}", flush=True)
+PY
 
 echo "=== MATERIALIZE INTERNAL TEST WITH FROZEN TRAIN NORMALIZATION ==="
 (
   cd "$code_root/backend"
   "$python_bin" -m multimodal_science.chrompeakformer.materialize_cli \
-    --index "$asset_index" \
-    --readiness-report "$readiness_report" \
-    --sequence-preflight "$sequence_preflight" \
-    --assets-root "$assets_root" \
+    --index "$internal_asset_index" \
+    --readiness-report "$internal_readiness" \
+    --sequence-preflight "$internal_sequence_preflight" \
+    --assets-root "$internal_assets_root" \
     --output-dir "$internal_dataset" \
     --split internal_test \
     --target-points 160 \
@@ -344,7 +494,7 @@ echo "=== BUILD DISJOINT PROMPT AND ANSWER ROOTS ==="
     --ledger-dir "$ledger_dir" \
     --dataset-root "$internal_dataset" \
     --dataset-report-sha256 "$internal_dataset_sha256" \
-    --assets-root "$assets_root" \
+    --assets-root "$internal_assets_root" \
     --output-dir "$final_data"
 )
 verify_manifest "$final_data"
@@ -381,7 +531,7 @@ run_image_candidate() {
       --ledger-dir "$ledger_dir" \
       --bundle-root "$final_data/inference" \
       --bundle-report-sha256 "$inference_sha256" \
-      --assets-root "$assets_root" \
+      --assets-root "$internal_assets_root" \
       --output-dir "$output" \
       --model-name-or-path "$model_root" \
       --model-revision "$model_revision" \
@@ -451,7 +601,7 @@ if [[ ! -d "$fusion_generation" ]]; then
     --fusion-bundle-report-sha256 "$fusion_bundle_sha256" \
     --dataset-root "$internal_dataset" \
     --dataset-report-sha256 "$internal_dataset_sha256" \
-    --assets-root "$assets_root" \
+    --assets-root "$internal_assets_root" \
     --fusion-adapter-root "$fusion_adapter_root" \
     --fusion-training-report-sha256 "$fusion_report_sha256" \
     --fusion-adapter-manifest-sha256 "$fusion_manifest_sha256" \
