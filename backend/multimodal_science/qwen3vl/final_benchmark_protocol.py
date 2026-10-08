@@ -243,6 +243,7 @@ def _candidate_lock(
     cross_family: dict[str, Any],
     dataset_root: Path,
     instruction_root: Path,
+    image_lora_root: Path,
     base_model_manifest_path: Path,
 ) -> dict[str, Any]:
     shared = _object(
@@ -373,7 +374,17 @@ def _candidate_lock(
         _object(lora_generation.get("model"), "LoRA generation model").get("adapter"),
         "LoRA generation adapter",
     )
-    lora_root = Path(str(lora_adapter.get("root") or "")).resolve()
+    lora_root = image_lora_root.resolve()
+    recorded_lora_root = lora_adapter.get("root")
+    if recorded_lora_root is not None:
+        _require(
+            isinstance(recorded_lora_root, str) and bool(recorded_lora_root.strip()),
+            "Recorded image-LoRA root is invalid",
+        )
+        _require(
+            Path(recorded_lora_root).resolve() == lora_root,
+            "Explicit image-LoRA root disagrees with the generation report",
+        )
     lora_manifest, lora_entries = _manifest_entries(lora_root)
     _require(
         lora_manifest == _hex64(lora_adapter.get("manifest_sha256"), "LoRA manifest SHA-256"),
@@ -648,6 +659,7 @@ def freeze_final_benchmark_protocol(
     derivation_report_path: Path,
     dataset_root: Path,
     instruction_root: Path,
+    image_lora_root: Path,
     base_model_manifest_path: Path,
     output_dir: Path,
     expected_internal_test_assets: int = 1815,
@@ -664,6 +676,7 @@ def freeze_final_benchmark_protocol(
     derivation_report_path = derivation_report_path.resolve()
     dataset_root = dataset_root.resolve()
     instruction_root = instruction_root.resolve()
+    image_lora_root = image_lora_root.resolve()
     base_model_manifest_path = base_model_manifest_path.resolve()
     output_dir = output_dir.resolve()
     _require(not output_dir.exists(), f"Final benchmark protocol already exists: {output_dir}")
@@ -677,6 +690,7 @@ def freeze_final_benchmark_protocol(
         _require(path.is_file(), f"{label.capitalize()} not found: {path}")
     _require(dataset_root.is_dir(), f"Dataset root not found: {dataset_root}")
     _require(instruction_root.is_dir(), f"Instruction root not found: {instruction_root}")
+    _require(image_lora_root.is_dir(), f"Image-LoRA root not found: {image_lora_root}")
 
     dossier_manifest, dossier_entries = _manifest_entries(development_dossier_root)
     dossier_report_path = development_dossier_root / "development_dossier.json"
@@ -708,6 +722,7 @@ def freeze_final_benchmark_protocol(
         cross_family=cross_family,
         dataset_root=dataset_root,
         instruction_root=instruction_root,
+        image_lora_root=image_lora_root,
         base_model_manifest_path=base_model_manifest_path,
     )
 

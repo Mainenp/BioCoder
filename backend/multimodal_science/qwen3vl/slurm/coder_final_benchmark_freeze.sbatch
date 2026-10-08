@@ -31,6 +31,7 @@ for required_name in \
   BIOCODER_DERIVATION_REPORT_PATH \
   BIOCODER_DATASET_ROOT \
   BIOCODER_INSTRUCTION_ROOT \
+  BIOCODER_IMAGE_LORA_ROOT \
   BIOCODER_MODEL_MANIFEST_PATH
 do
   require_variable "$required_name"
@@ -66,7 +67,8 @@ done
 for path in \
   "$BIOCODER_DEVELOPMENT_DOSSIER_ROOT" \
   "$BIOCODER_DATASET_ROOT" \
-  "$BIOCODER_INSTRUCTION_ROOT"
+  "$BIOCODER_INSTRUCTION_ROOT" \
+  "$BIOCODER_IMAGE_LORA_ROOT"
 do
   test -d "$path"
 done
@@ -100,6 +102,7 @@ if [[ ! -d "$protocol_root" ]]; then
         --derivation-report "$BIOCODER_DERIVATION_REPORT_PATH" \
         --dataset-root "$BIOCODER_DATASET_ROOT" \
         --instruction-root "$BIOCODER_INSTRUCTION_ROOT" \
+        --image-lora-root "$BIOCODER_IMAGE_LORA_ROOT" \
         --base-model-manifest "$BIOCODER_MODEL_MANIFEST_PATH" \
         --output-dir "$protocol_root" \
         --expected-internal-test-assets "$expected_assets" \

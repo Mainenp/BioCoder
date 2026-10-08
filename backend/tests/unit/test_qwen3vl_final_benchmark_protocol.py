@@ -132,10 +132,10 @@ class _ProtocolFixture:
         self.model_manifest_sha256 = _sha256(self.model_manifest)
         self.model_artifact_sha256 = "a" * 64
 
-        lora_root = self.root / "image_lora"
-        lora_weights = lora_root / "adapter" / "adapter_model.safetensors"
+        self.lora_root = self.root / "image_lora"
+        lora_weights = self.lora_root / "adapter" / "adapter_model.safetensors"
         _write_bytes(lora_weights, b"lora")
-        lora_report_path = lora_root / "lora_training_report.json"
+        lora_report_path = self.lora_root / "lora_training_report.json"
         _write_json(
             lora_report_path,
             {
@@ -147,7 +147,7 @@ class _ProtocolFixture:
             },
         )
         lora_manifest_sha = _write_manifest(
-            lora_root,
+            self.lora_root,
             ["lora_training_report.json", "adapter/adapter_model.safetensors"],
         )
 
@@ -204,7 +204,6 @@ class _ProtocolFixture:
                     "requested_revision": "modelscope-master",
                     "artifact_sha256": self.model_artifact_sha256,
                     "adapter": {
-                        "root": str(lora_root),
                         "training_report_sha256": _sha256(lora_report_path),
                         "manifest_sha256": lora_manifest_sha,
                     },
@@ -366,7 +365,7 @@ class _ProtocolFixture:
             },
         )
 
-    def freeze(self):
+    def freeze(self, *, image_lora_root: Path | None = None):
         return freeze_final_benchmark_protocol(
             development_dossier_root=self.dossier_root,
             split_manifest_path=self.split_manifest,
@@ -375,6 +374,7 @@ class _ProtocolFixture:
             derivation_report_path=self.derivation_report,
             dataset_root=self.dataset_root,
             instruction_root=self.instruction_root,
+            image_lora_root=image_lora_root or self.lora_root,
             base_model_manifest_path=self.model_manifest,
             output_dir=self.output,
         )
@@ -441,6 +441,23 @@ class FinalBenchmarkProtocolTests(unittest.TestCase):
 
             with self.assertRaisesRegex(ValueError, "three_seed_statistics_complete"):
                 fixture.freeze()
+
+    def test_explicit_lora_root_must_match_hash_bound_generation_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            fixture = _ProtocolFixture(Path(temporary))
+            decoy = fixture.root / "decoy_lora"
+            _write_bytes(decoy / "adapter" / "adapter_model.safetensors", b"decoy")
+            _write_json(
+                decoy / "lora_training_report.json",
+                {"schema_version": "chrompeak-qwen3vl-lora-training-v1"},
+            )
+            _write_manifest(
+                decoy,
+                ["lora_training_report.json", "adapter/adapter_model.safetensors"],
+            )
+
+            with self.assertRaisesRegex(ValueError, "Image-LoRA manifest drift"):
+                fixture.freeze(image_lora_root=decoy)
 
     def test_one_time_access_is_exclusive_and_exact_protocol_resume_is_allowed(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -516,6 +533,8 @@ class FinalBenchmarkProtocolTests(unittest.TestCase):
 
         self.assertTrue(freeze_script.startswith("#!/usr/bin/env bash\n"))
         self.assertIn("freeze_final_benchmark_cli", freeze_script)
+        self.assertIn("BIOCODER_IMAGE_LORA_ROOT", freeze_script)
+        self.assertIn('--image-lora-root "$BIOCODER_IMAGE_LORA_ROOT"', freeze_script)
         self.assertNotIn("final_benchmark_access_cli open", freeze_script)
         self.assertNotIn("build_final_benchmark_data_cli", freeze_script)
 

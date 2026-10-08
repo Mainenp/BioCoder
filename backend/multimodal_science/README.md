@@ -911,6 +911,8 @@ manifest, fixes the exact five primary candidates, validation-frozen operating t
 base-model revision, generation settings, 10,000-resample source-group bootstrap policy, split
 manifest, derivation plan, and train-fitted scalar normalization. It produces a hash-bound protocol
 whose state remains `internal_test_accessed=false`; it cannot open or materialize the test split.
+The image-only LoRA run root is an explicit required freeze input and is accepted only when both
+its training-report and artifact-manifest hashes match the already bound development generation.
 
 Only after that protocol has been reviewed may
 `qwen3vl/slurm/coder_final_benchmark_run.sbatch` be submitted. The formal job first verifies the
