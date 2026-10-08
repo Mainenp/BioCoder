@@ -161,6 +161,65 @@ def _read_jsonl(path: Path, context: str) -> list[dict[str, Any]]:
     return records
 
 
+def verify_generation_output(output_dir: Path) -> str:
+    """Verify a completed generation report and every artifact it binds."""
+
+    root = output_dir.resolve()
+    _require(root.is_dir(), f"Generation output directory not found: {root}")
+    report_path = root / "generation_report.json"
+    report = _read_json(report_path, "generation report")
+    _require(
+        report.get("schema_version") == GENERATION_REPORT_SCHEMA,
+        "Unexpected generation report schema",
+    )
+    artifacts = _object(report.get("artifacts"), "generation report artifacts")
+    expected_artifacts = {
+        "run_config",
+        "runtime_metadata",
+        "generation_records",
+        "predictions",
+    }
+    _require(
+        set(artifacts) == expected_artifacts,
+        "Generation report artifact set is incomplete or unexpected",
+    )
+    record_counts: dict[str, int] = {}
+    for name in sorted(expected_artifacts):
+        descriptor = _object(artifacts.get(name), f"generation artifact {name}")
+        path = _safe_child(root, descriptor.get("path"), f"generation artifact {name}")
+        expected_sha256 = descriptor.get("sha256")
+        _require(
+            isinstance(expected_sha256, str) and bool(_HEX_64.fullmatch(expected_sha256)),
+            f"Invalid generation artifact hash: {name}",
+        )
+        _require(path.is_file(), f"Missing generation artifact: {name}")
+        _require(
+            sha256_file(path) == expected_sha256,
+            f"Generation artifact hash mismatch: {name}",
+        )
+        if "records" in descriptor:
+            records = descriptor.get("records")
+            _require(
+                isinstance(records, int) and not isinstance(records, bool) and records >= 1,
+                f"Invalid generation artifact record count: {name}",
+            )
+            _require(
+                len(_read_jsonl(path, f"generation artifact {name}")) == records,
+                f"Generation artifact record count mismatch: {name}",
+            )
+            record_counts[name] = records
+    _require(
+        record_counts.get("generation_records") == record_counts.get("predictions"),
+        "Generation evidence and prediction counts differ",
+    )
+    counts = _object(report.get("counts"), "generation report counts")
+    _require(
+        counts.get("predictions") == record_counts.get("predictions"),
+        "Generation report prediction count mismatch",
+    )
+    return sha256_file(report_path)
+
+
 def _write_json(path: Path, payload: dict[str, Any]) -> None:
     path.write_text(
         json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n",

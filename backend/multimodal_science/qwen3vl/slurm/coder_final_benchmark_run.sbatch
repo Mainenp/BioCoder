@@ -293,6 +293,18 @@ verified_report_sha() {
   sha256sum "$root/$report" | awk '{print $1}'
 }
 
+verified_generation_sha() {
+  local root="$1"
+  "$python_bin" - "$root" <<'PY'
+import pathlib
+import sys
+
+from multimodal_science.qwen3vl.inference import verify_generation_output
+
+print(verify_generation_output(pathlib.Path(sys.argv[1])), flush=True)
+PY
+}
+
 if [[ -f "$ledger_dir/access_completed.json" ]]; then
   "$python_bin" -m multimodal_science.qwen3vl.final_benchmark_access_cli complete \
     --protocol-root "$protocol_root" \
@@ -544,7 +556,7 @@ run_image_candidate() {
       --resume \
       "$@" >&2
   fi
-  verified_report_sha "$output" generation_report.json
+  verified_generation_sha "$output"
 }
 
 evaluate_qwen_candidate() {
@@ -552,7 +564,7 @@ evaluate_qwen_candidate() {
   local generation="$generation_root/$candidate"
   local output="$evaluation_root/$candidate"
   local generation_sha256
-  generation_sha256="$(verified_report_sha "$generation" generation_report.json)"
+  generation_sha256="$(verified_generation_sha "$generation")"
   if [[ ! -d "$output" ]]; then
     "$python_bin" -m multimodal_science.qwen3vl.evaluate_final_predictions_cli \
       --candidate "$candidate" \
@@ -614,7 +626,7 @@ if [[ ! -d "$fusion_generation" ]]; then
     --attention-implementation "$fusion_attention" \
     --resume
 fi
-fusion_generation_sha256="$(verified_report_sha "$fusion_generation" generation_report.json)"
+fusion_generation_sha256="$(verified_generation_sha "$fusion_generation")"
 echo "FUSION_GENERATION_SHA256=$fusion_generation_sha256"
 fusion_evaluation_sha256="$(evaluate_qwen_candidate qwen3vl_image_xic_fusion)"
 echo "FUSION_EVALUATION_SHA256=$fusion_evaluation_sha256"

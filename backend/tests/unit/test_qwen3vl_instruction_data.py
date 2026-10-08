@@ -38,6 +38,7 @@ from multimodal_science.qwen3vl.inference import (
     PromptRequest,
     _TransformersGenerator,
     run_qwen_inference,
+    verify_generation_output,
 )
 from multimodal_science.qwen3vl.run_inference_cli import parser as inference_parser
 
@@ -595,6 +596,11 @@ class Qwen3VLInferenceRunnerTests(unittest.TestCase):
             self.assertTrue(report["contracts"]["input_is_prompt_only_bundle"])
             self.assertFalse(report["contracts"]["answer_key_available_to_runner"])
             self.assertFalse(report["internal_test_accessed"])
+            self.assertEqual(verify_generation_output(result.output_dir), result.report_sha256)
+
+            result.predictions_path.write_text("{}\n", encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "Generation artifact hash mismatch"):
+                verify_generation_output(result.output_dir)
 
     def test_accepts_a_hash_bound_custom_adapter_verifier(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

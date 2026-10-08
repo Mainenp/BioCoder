@@ -8,6 +8,7 @@ from pathlib import Path
 
 from multimodal_science.qwen3vl.final_benchmark_protocol import (
     FINAL_BENCHMARK_PROTOCOL_SCHEMA,
+    _manifest_entries as _protocol_manifest_entries,
     _requested_model_revision,
     complete_final_benchmark_access,
     freeze_final_benchmark_protocol,
@@ -381,6 +382,22 @@ class _ProtocolFixture:
 
 
 class FinalBenchmarkProtocolTests(unittest.TestCase):
+    def test_protocol_manifest_rejects_duplicate_normalized_paths(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            artifact = root / "artifact.json"
+            _write_json(artifact, {"value": 1})
+            digest = _sha256(artifact)
+            (root / "artifact_manifest.sha256").write_text(
+                f"{digest}  artifact.json\n{digest}  ./artifact.json\n",
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(
+                ValueError, "Duplicate normalized artifact manifest path"
+            ):
+                _protocol_manifest_entries(root)
+
     def test_reads_current_and_legacy_model_revision_without_ambiguity(self) -> None:
         self.assertEqual(
             _requested_model_revision(

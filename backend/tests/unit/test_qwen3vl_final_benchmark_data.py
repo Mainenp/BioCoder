@@ -10,6 +10,7 @@ import numpy as np
 
 from multimodal_science.baselines.final_sequence_evaluation import (
     FINAL_SEQUENCE_EVALUATION_SCHEMA,
+    _manifest_entries as _sequence_manifest_entries,
     evaluate_final_sequence_candidate,
 )
 from multimodal_science.chrompeakformer.final_detector_evaluation import (
@@ -242,9 +243,9 @@ class _FinalDataFixture:
         _write_manifest(
             sequence_root,
             [
-                sequence_checkpoint.name,
-                sequence_threshold.name,
-                sequence_report.name,
+                f"./{sequence_checkpoint.name}",
+                f"./{sequence_threshold.name}",
+                f"./{sequence_report.name}",
             ],
         )
 
@@ -729,6 +730,24 @@ class FinalBenchmarkDataTests(unittest.TestCase):
                 ValueError, "Duplicate normalized detector manifest path"
             ):
                 _detector_manifest_entries(root, _sha256(manifest))
+
+    def test_sequence_manifest_rejects_duplicate_normalized_paths(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            checkpoint = root / "best_model.pt"
+            checkpoint.write_bytes(b"checkpoint")
+            digest = _sha256(checkpoint)
+            manifest = root / "artifact_manifest.sha256"
+            manifest.write_text(
+                f"{digest}  best_model.pt\n"
+                f"{digest}  ./best_model.pt\n",
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(
+                ValueError, "Duplicate normalized sequence manifest path"
+            ):
+                _sequence_manifest_entries(root, _sha256(manifest))
 
     def test_final_report_requires_all_five_candidates_from_one_access_event(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

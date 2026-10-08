@@ -174,14 +174,18 @@ def _manifest_entries(root: Path) -> tuple[str, dict[str, str]]:
         _require(len(parts) == 2, f"Invalid artifact manifest line {line_number}")
         digest = _hex64(parts[0], f"Manifest digest at line {line_number}")
         relative = parts[1].strip().lstrip("*")
-        _require(relative not in entries, f"Duplicate artifact manifest path: {relative}")
         artifact = _safe_relative(root, relative, "artifact manifest")
+        canonical = artifact.relative_to(root).as_posix()
+        _require(
+            canonical not in entries,
+            f"Duplicate normalized artifact manifest path: {canonical}",
+        )
         _require(artifact.is_file(), f"Manifest artifact not found: {artifact}")
         _require(
             sha256_file(artifact) == digest,
             f"Manifest artifact hash mismatch: {relative}",
         )
-        entries[Path(relative).as_posix()] = digest
+        entries[canonical] = digest
     _require(bool(entries), f"Artifact manifest is empty: {manifest}")
     return sha256_file(manifest), entries
 

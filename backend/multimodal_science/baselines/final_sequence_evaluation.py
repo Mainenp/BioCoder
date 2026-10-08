@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import math
+import re
 import tempfile
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -32,6 +33,7 @@ from multimodal_science.qwen3vl.final_benchmark_protocol import (
 
 FINAL_SEQUENCE_EVALUATION_SCHEMA = "chrompeak-sequence-final-evaluation-v1"
 FINAL_SEQUENCE_PREDICTION_SCHEMA = "chrompeak-sequence-final-prediction-v1"
+_HEX_64 = re.compile(r"^[0-9a-f]{64}$")
 
 
 @dataclass(frozen=True)
@@ -82,6 +84,7 @@ def _write_jsonl(path: Path, rows: list[dict[str, Any]]) -> None:
 
 
 def _manifest_entries(root: Path, expected_manifest_sha256: str) -> dict[str, str]:
+    root = root.resolve()
     manifest = root / "artifact_manifest.sha256"
     _require(manifest.is_file(), f"Candidate manifest not found: {manifest}")
     _require(
@@ -92,18 +95,33 @@ def _manifest_entries(root: Path, expected_manifest_sha256: str) -> dict[str, st
     for line_number, line in enumerate(
         manifest.read_text(encoding="utf-8").splitlines(), start=1
     ):
-        parts = line.strip().split(maxsplit=1)
+        if not line.strip():
+            continue
+        parts = line.split(maxsplit=1)
         _require(len(parts) == 2, f"Malformed manifest line {line_number}")
         digest, relative = parts
-        relative = relative.strip().replace("\\", "/")
-        _require(len(digest) == 64 and relative not in entries, "Bad manifest entry")
+        _require(bool(_HEX_64.fullmatch(digest)), f"Bad manifest digest at line {line_number}")
+        relative = relative.strip().lstrip("*").replace("\\", "/")
+        relative_path = Path(relative)
+        _require(
+            relative != "" and relative_path != Path("."),
+            f"Missing manifest path at line {line_number}",
+        )
+        _require(
+            not relative_path.is_absolute(),
+            f"Manifest path must be relative at line {line_number}",
+        )
         path = (root / relative).resolve()
         try:
-            path.relative_to(root)
+            canonical = path.relative_to(root).as_posix()
         except ValueError as error:
             raise ValueError("Candidate manifest path escapes its root") from error
+        _require(
+            canonical not in entries,
+            f"Duplicate normalized sequence manifest path: {canonical}",
+        )
         _require(path.is_file() and sha256_file(path) == digest, f"Artifact drift: {relative}")
-        entries[relative] = digest
+        entries[canonical] = digest
     _require(bool(entries), "Candidate artifact manifest is empty")
     return entries
 
