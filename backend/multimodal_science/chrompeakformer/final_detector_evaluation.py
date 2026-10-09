@@ -8,6 +8,8 @@ import math
 import re
 import sys
 import tempfile
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -189,6 +191,34 @@ def _verify_candidate(
     return checkpoint, training_report, threshold, source_sha256
 
 
+@contextmanager
+def _checkpoint_only_backbone_initialization(
+    torchvision_models: Any,
+    backbone_name: str,
+) -> Iterator[None]:
+    """Prevent pretrained downloads while reconstructing a complete checkpoint."""
+
+    _require(bool(backbone_name), "Detector checkpoint does not name its backbone")
+    original = getattr(torchvision_models, backbone_name, None)
+    _require(callable(original), f"Unsupported detector backbone: {backbone_name}")
+
+    def build_without_pretrained_download(*args: Any, **kwargs: Any) -> Any:
+        # The private source uses torchvision's legacy ``pretrained=True`` API.
+        # The frozen checkpoint contains the complete model state, so downloading
+        # an initialization here is both unnecessary and an unfrozen dependency.
+        if "pretrained" in kwargs:
+            kwargs["pretrained"] = False
+        if "weights" in kwargs:
+            kwargs["weights"] = None
+        return original(*args, **kwargs)
+
+    setattr(torchvision_models, backbone_name, build_without_pretrained_download)
+    try:
+        yield
+    finally:
+        setattr(torchvision_models, backbone_name, original)
+
+
 def _default_predictor(
     source_root: Path,
     checkpoint_path: Path,
@@ -199,6 +229,7 @@ def _default_predictor(
     amp: bool,
 ) -> tuple[list[dict[str, Any]], list[int]]:
     import torch
+    import torchvision.models as torchvision_models
     from torch.utils.data import DataLoader
 
     _require(device_name in {"cpu", "cuda"}, f"Unsupported device: {device_name}")
@@ -221,7 +252,13 @@ def _default_predictor(
         arguments.rank = 0
         arguments.gpu = 0
         arguments.num_workers = num_workers
-        model, _, postprocessors = build_model(arguments)
+        backbone_name = getattr(arguments, "backbone", "")
+        _require(isinstance(backbone_name, str), "Detector backbone name is invalid")
+        with _checkpoint_only_backbone_initialization(
+            torchvision_models,
+            backbone_name,
+        ):
+            model, _, postprocessors = build_model(arguments)
         loaded = model.load_state_dict(checkpoint["model"], strict=True)
         _require(
             not loaded.missing_keys and not loaded.unexpected_keys,

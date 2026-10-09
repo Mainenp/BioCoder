@@ -15,6 +15,7 @@ from multimodal_science.baselines.final_sequence_evaluation import (
 )
 from multimodal_science.chrompeakformer.final_detector_evaluation import (
     FINAL_DETECTOR_EVALUATION_SCHEMA,
+    _checkpoint_only_backbone_initialization,
     _manifest_entries as _detector_manifest_entries,
     _source_tree_sha256,
     evaluate_final_detector_candidate,
@@ -790,6 +791,49 @@ class FinalBenchmarkDataTests(unittest.TestCase):
             self.assertFalse(report["evaluation"]["threshold_selection_performed"])
             self.assertEqual(report["evaluation"]["bootstrap_iterations"], 10_000)
             self.assertTrue(report["final_benchmark_eligible"])
+
+    def test_final_detector_reconstruction_disables_pretrained_download(self) -> None:
+        calls: list[dict[str, object]] = []
+        expected = object()
+
+        def resnet50(*args: object, **kwargs: object) -> object:
+            calls.append(dict(kwargs))
+            return expected
+
+        class Models:
+            pass
+
+        models = Models()
+        models.resnet50 = resnet50
+
+        with _checkpoint_only_backbone_initialization(models, "resnet50"):
+            legacy_result = models.resnet50(
+                replace_stride_with_dilation=[False, False, False],
+                pretrained=True,
+            )
+            modern_result = models.resnet50(weights="DEFAULT")
+
+        self.assertIs(legacy_result, expected)
+        self.assertIs(modern_result, expected)
+        self.assertIs(models.resnet50, resnet50)
+        self.assertEqual(calls[0]["pretrained"], False)
+        self.assertIsNone(calls[1]["weights"])
+
+    def test_final_detector_reconstruction_restores_builder_after_failure(self) -> None:
+        def resnet50(**kwargs: object) -> object:
+            return kwargs
+
+        class Models:
+            pass
+
+        models = Models()
+        models.resnet50 = resnet50
+
+        with self.assertRaisesRegex(RuntimeError, "build failed"):
+            with _checkpoint_only_backbone_initialization(models, "resnet50"):
+                raise RuntimeError("build failed")
+
+        self.assertIs(models.resnet50, resnet50)
 
     def test_detector_manifest_rejects_duplicate_normalized_paths(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
