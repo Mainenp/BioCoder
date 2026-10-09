@@ -1043,35 +1043,43 @@ result and must not be used to select a training protocol on validation data.
 
 ## Current boundary
 
-This phase has produced deterministic splits, hash-verified extraction jobs, a private-source
-adapter, an atomic execution boundary, and a complete train-plus-validation ROI/XIC/COCO index for
-dataset version `raw-072fee8e`. The unified Dataset loader, source-grouped metrics, PyTorch residual
-1D runner, independent run validator, bilingual Qwen3-VL instruction builder, prompt-only inference
-bundle, resumable Transformers inference runner, and provenance-gated evaluator are implemented.
-A verified external bilingual materialization contains 16,170 independent ROI assets, 54,335 train
-instructions, and 13,708 parallel answer-separated validation instructions; its report SHA-256 is
-`3c414f0937c9797538b5bae5c656c84ba45b5132ef52d07dd6648037dc1e4fb8`. The 6,854 semantic
-validation pairs comprise correlated `en` and `zh-CN` views and are not extra scientific samples.
-These artifacts remain outside Git. A full, immutable Qwen3-VL-4B zero-shot run now covers all
-13,708 validation prompts and is eligible for development comparison without accessing internal
-test data. Its generation report SHA-256 is
-`f3378e24eabdb3cdc685d351bdce3051d3b63435251226e58391dd93199a489f`; the answer-separated
-evaluation report SHA-256 is
-`b3c72b9a4c802a0306cf9fd09fb5cf0867c63ec8770b916cb8a8dd0f6255c183`. This is a baseline,
-not a trained-domain result: 13,001 responses passed their task schema, while the task metrics
-expose class shortcuts, language sensitivity, and grounding failures. The subsequent immutable
-failure audit has report SHA-256
-`e75cfd910079fd0c5cd588c935b29b269c2f8c10acc644fee403db7a2eb21fab`. It confirms constant
-image-only presence and QC outputs, opposite metadata-driven English/Chinese biases, and no useful
-global `0..1000` reinterpretation: horizontal normalization rescued 698 invalid English boxes but
-improved English mean IoU by only `0.0040` while severely degrading Chinese grounding. Full
-formal baseline training, Qwen3-VL domain training, fusion training, three-seed/token ablations,
-selected-checkpoint causal interventions, and the pre-test development dossier are now complete.
-The five-candidate protocol has been frozen and its sole internal-test access event has been opened.
-If infrastructure fails after that point, the runner permits only an exact-protocol crash resume:
-it verifies the existing access ledger, executes only the frozen plan's `internal_test` jobs from
-the explicitly configured `BIOCODER_RAW_DATA_ROOT`, builds a separate complete test-only asset
-index beneath that protocol's isolated final-run root, and applies the train-frozen scalar
-normalization. Refreezing candidates, thresholds,
-metrics, or a second access event is forbidden. Completion of the sole model-benchmark run and the
-separate BioCoder agent-tool evaluation remain downstream milestones in `MULTIMODAL_ROADMAP.md`.
+Model-benchmark v1 is complete for dataset version `raw-072fee8e`. Its frozen protocol SHA-256 is
+`0bb30f51f4ab95f3ceee6d577ad2a8d698e224bfa240091011b42525ea6b2b25`; access sequence 1 is
+complete, and the final report SHA-256 is
+`78e0100e971cb1a6cc37e93775997c54c3e0db12e491ea77f6944706ab4465d2`. The run evaluated all
+five frozen candidates on 1,815 assets from 11 independent source mzML groups, performed no
+post-test model or threshold selection, and authorizes no additional test access. The result table
+and interpretation are maintained in [`MULTIMODAL_RESULTS.md`](../../MULTIMODAL_RESULTS.md).
+
+The source evidence remains outside Git. Verify it in place without reopening protected records:
+
+```bash
+biocoder multimodal verify-final \
+  --protocol-root "<protocol-root>" \
+  --protocol-sha256 "<frozen-protocol-sha256>" \
+  --ledger-dir "<completed-access-ledger>" \
+  --report-root "<final-report-root>"
+```
+
+Build a deterministic public-safe directory and ZIP only after that full chain verifies:
+
+```bash
+biocoder multimodal archive-final \
+  --protocol-root "<protocol-root>" \
+  --protocol-sha256 "<frozen-protocol-sha256>" \
+  --ledger-dir "<completed-access-ledger>" \
+  --report-root "<final-report-root>" \
+  --output-dir "<public-release-root>"
+
+biocoder multimodal verify-release \
+  --release-root "<public-release-root>" \
+  --archive "<public-release-root>.zip"
+```
+
+The release contains aggregate rows and cryptographic identifiers only. It excludes raw mzML,
+images, labels, answer keys, predictions, weights, private detector source, and absolute execution
+paths. The final model table does not satisfy the separate BioCoder agent gate for tool selection,
+arguments, abstention, trajectory quality, evidence attribution, or UI behavior. The research
+pipeline is runnable through its CLIs and Slurm scripts; it is not yet a production FastAPI or
+LangGraph chromatogram tool. Reinforcement learning is explicitly a v2 experiment and requires a
+new sealed test set.

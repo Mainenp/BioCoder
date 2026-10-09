@@ -1,6 +1,10 @@
 # ChromPeakFormer Multimodal Test Plan
 
-Status: planned. A requirement is complete only when its linked checks pass with saved evidence.
+Status: the v1 scientific/model benchmark and its predeclared T01-T23 evidence are complete and
+sealed. T24 agent evaluation, T25 agent-side promotion, and the interactive T26 product
+demonstration remain open; model-benchmark eligibility alone does not satisfy them. T27 public
+traceability is implemented through `MULTIMODAL_RESULTS.md` and `biocoder multimodal` release
+verification. Any v2 reinforcement-learning experiment requires a new test protocol.
 
 ## Acceptance mapping
 

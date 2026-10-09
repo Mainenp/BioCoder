@@ -1,27 +1,16 @@
 # BioCoder × ChromPeakFormer Multimodal Roadmap
 
-Status: Phase A manifest audit, Phase A-plus group splitting, the complete train-plus-validation
-ROI/XIC/COCO build, and unified 160-point Dataset materialization are verified. The sequence
-training runner, independent run validator, and Qwen3-VL instruction/evaluation builder are
-implemented. The bilingual instruction Dataset has been materialized externally and its oracle
-evaluation contract verified. A prompt-only inference bundle, resumable Transformers runner, and
-generation-provenance gate are implemented. A train-only LoRA bundle builder and resumable
-single-GPU BF16 LoRA runner have passed two independent CUDA smoke runs. The uncapped 54,335-row
-formal LoRA run completed 3,396 optimizer updates, and its full 13,708-prompt answer-separated
-validation evaluation passed the development-evidence contract. A formal
-ChromPeakFormer detector baseline, both
-SequencePeakNet ablations, and a full Qwen3-VL-4B bilingual zero-shot baseline with failure-mode
-audit are verified externally. Cross-family comparison is implemented. The answer-isolated
-image/XIC bundle and a two-update LoRA-plus-projector CUDA smoke have passed their immutable input,
-forward/backward, serialization, and reload contracts. Full fusion training, same-validation
-fusion evaluation for the canonical seed-17 model, causal XIC intervention analysis, and the full
-five-cell reproducibility/token matrix are complete. Aligned same-validation evaluation,
-provenance-bound aggregation of all five matrix cells, the selected-checkpoint causal
-interventions, and the cross-family development dossier are complete. The dossier's pre-test gate
-passes. A one-time five-candidate model-benchmark protocol, access ledger, separated test-data
-views, frozen evaluators, final table, and evidence registry are implemented and under final code
-verification. The sealed internal test has not been opened. BioCoder agent integration and its T24
-tool/abstention/evidence evaluation remain a separate promotion gate.
+Status: model-benchmark v1 is complete. The project verified deterministic data derivation,
+leakage-safe group splits, specialist baselines, bilingual Qwen3-VL LoRA, continuous XIC fusion,
+zero-label auxiliary initialization, selected-checkpoint causal interventions, three training
+seeds, 1/4/8 sensor-token ablations, and bilingual/localization failure analysis. The frozen
+five-candidate protocol opened the internal test exactly once, completed the declared evaluations,
+and sealed its access ledger to final report SHA-256
+`78e0100e971cb1a6cc37e93775997c54c3e0db12e491ea77f6944706ab4465d2`.
+Public-safe verification and deterministic archive entry points are available through
+`biocoder multimodal`. BioCoder agent integration and its T24 tool/abstention/evidence evaluation
+remain a separate promotion gate. Any reinforcement-learning work belongs to v2 and must use a new
+sealed test rather than reopening or selecting against v1.
 
 ## Verified Phase A snapshot
 
@@ -351,7 +340,8 @@ mean/sample-SD, bilingual consistency, token-count deltas, and the gate audit. T
 implemented gate is `coder_build_development_dossier.sbatch`, which joins that matrix with the
 earlier cross-family and causal-intervention evidence and emits the frozen main table plus
 bilingual/localization failure cases. That dossier and the exact-selected-checkpoint intervention
-reruns are now complete; its pre-internal-test readiness gate passes. Internal test remains sealed.
+reruns completed before access; the subsequently frozen internal-test run is now complete and its
+access ledger is sealed to the final evidence manifest.
 
 Four additional vendor containers are now admitted only through an auxiliary-unlabeled contract.
 They comprise four independent source groups, 77 converted acquisition frames, and 1,610 transition
@@ -395,13 +385,14 @@ Agent evaluation:
 
 A candidate cannot be promoted without both scientific and agent evidence.
 
-The implemented one-time final protocol covers the scientific/model half of this phase. It freezes
+The completed one-time final protocol covers the scientific/model half of this phase. It froze
 five candidates (zero-shot, image LoRA, image+XIC, SequencePeakNet, and ChromPeakFormer), all
 operating thresholds, decoding settings, provenance hashes, and source-group bootstrap policy
 before access. The freeze job cannot read test rows. The formal job may create access sequence 1
-only after all immutable-input and GPU checks pass, and an infrastructure failure may resume only
-that exact protocol. Its final eligibility flag applies to the five-model benchmark, not to the
-BioCoder agent promotion gate. T24 agent metrics must still be produced separately.
+only after all immutable-input and GPU checks passed, and infrastructure failures resumed only the
+same protocol and access ID. The access ledger is now complete and bound to the final evidence
+manifest. Its eligibility flag applies to the five-model benchmark, not to the BioCoder agent
+promotion gate. T24 agent metrics must still be produced separately.
 
 ### Phase 9 — Reproducible public artifacts
 
@@ -410,6 +401,11 @@ BioCoder agent promotion gate. T24 agent metrics must still be produced separate
 - Model card and limitations.
 - Scientific and agent evaluation reports.
 - Failure-case and ablation analyses.
+
+The implemented public-release builder verifies the protocol, completed access ledger, final
+report, registry, and all five upstream evaluation manifests before emitting a deterministic,
+path-free ZIP. The release excludes raw data, labels, predictions, weights, private source, and
+machine-specific paths.
 
 ## Acceptance criteria
 

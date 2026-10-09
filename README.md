@@ -17,6 +17,8 @@ The current system focuses on evidence-based medical research. A future molecula
 - Returns source links, numbered citations, evidence summaries, and stated limitations.
 - Supports multi-turn conversations, history, attachment analysis, and evidence review.
 - Records agent trajectories and user feedback for evaluation and future model improvement.
+- Ships a hash-verified LC-MS multimodal research pipeline and a read-only CLI for verifying,
+  archiving, and inspecting its sealed benchmark evidence.
 
 ## Evidence sources
 
@@ -66,12 +68,21 @@ BioCoder distinguishes retrieved facts, model inference, conflicting evidence, a
 
 The repository includes SFT and DPO entry points and a GRPO reward scaffold. Training completion does not imply deployment approval: candidate models must pass regression evaluation and human review before promotion.
 
-## Roadmap: scientific multimodal chromatography
+## Scientific multimodal chromatography
 
-BioCoder is implementing an LC-MS multimodal workflow under the public project name `ChromPeakFormer`. Its verified data substrate now contains a leakage-resistant, provenance-tracked train and validation index of aligned chromatogram ROI images, RT-intensity sequences, transition metadata, and peak annotations. Reproducible sequence training, independent run verification, bilingual Qwen3-VL instruction data, a prompt-only inference boundary, resumable model generation, and provenance-gated evaluation are implemented; completed model runs, specialist-tool integration, and domain-adapted Qwen3-VL results remain evidence-gated downstream milestones.
+BioCoder now includes a completed LC-MS multimodal research workflow under the public project name
+`ChromPeakFormer`. It covers leakage-resistant data derivation, aligned chromatogram images and XIC
+sequences, specialist baselines, bilingual Qwen3-VL LoRA, continuous-signal fusion, causal
+interventions, multi-seed ablations, a once-only sealed benchmark, and hash-bound release evidence.
+The frozen image+XIC model reached Macro-F1 `0.9319` (English) and `0.9285` (Chinese); the
+language-neutral SequencePeakNet specialist reached Macro-F1 `0.9668`.
 
-This roadmap is explicitly evidence-gated: tool integration, Qwen3-VL LoRA training, numerical-signal fusion, scientific evaluation, and public metric claims are treated as separate milestones. Planned work is not presented as completed capability.
+The model benchmark is complete, but interactive LangGraph/FastAPI tool serving and the separate
+agent promotion suite remain future product gates. Model metrics are not presented as agent
+metrics, and reinforcement learning is reserved for a separately evaluated v2 rather than tuning
+against the sealed v1 test.
 
+- [Sealed benchmark results and evidence identity](MULTIMODAL_RESULTS.md)
 - [Multimodal architecture and implementation roadmap](MULTIMODAL_ROADMAP.md)
 - [Verification, leakage-control, and ablation plan](MULTIMODAL_TEST_PLAN.md)
 
