@@ -4,7 +4,9 @@ Status: the v1 scientific/model benchmark and its predeclared T01-T23 evidence a
 sealed. T24 agent evaluation, T25 agent-side promotion, and the interactive T26 product
 demonstration remain open; model-benchmark eligibility alone does not satisfy them. T27 public
 traceability is implemented through `MULTIMODAL_RESULTS.md` and `biocoder multimodal` release
-verification. Any v2 reinforcement-learning experiment requires a new test protocol.
+verification. The materialized deterministic ZIP passed standalone verification at SHA-256
+`a402c31de998f4392ca66798ae8c6db18d227ccc634415d322d82b6b55520481`. Any v2
+reinforcement-learning experiment requires a new test protocol.
 
 ## Acceptance mapping
 

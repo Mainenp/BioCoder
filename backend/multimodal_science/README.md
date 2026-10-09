@@ -1078,7 +1078,10 @@ biocoder multimodal verify-release \
 
 The release contains aggregate rows and cryptographic identifiers only. It excludes raw mzML,
 images, labels, answer keys, predictions, weights, private detector source, and absolute execution
-paths. The final model table does not satisfy the separate BioCoder agent gate for tool selection,
+paths. The materialized v1 release manifest is
+`82e8f7fed0d470aa4b3ba511977c4e6c71d53a15c913450702dc058a50c0f30d`; its deterministic
+ZIP is `a402c31de998f4392ca66798ae8c6db18d227ccc634415d322d82b6b55520481`. The final model
+table does not satisfy the separate BioCoder agent gate for tool selection,
 arguments, abstention, trajectory quality, evidence attribution, or UI behavior. The research
 pipeline is runnable through its CLIs and Slurm scripts; it is not yet a production FastAPI or
 LangGraph chromatogram tool. Reinforcement learning is explicitly a v2 experiment and requires a

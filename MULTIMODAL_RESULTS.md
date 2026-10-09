@@ -10,6 +10,12 @@ internal-test benchmark. It is a model benchmark, not a BioCoder agent-promotion
   `0bb30f51f4ab95f3ceee6d577ad2a8d698e224bfa240091011b42525ea6b2b25`
 - Final benchmark report SHA-256:
   `78e0100e971cb1a6cc37e93775997c54c3e0db12e491ea77f6944706ab4465d2`
+- Final evidence manifest SHA-256:
+  `3575d0946e7c801931775222e5187f191a0263b407eaab27f9dc1efc1a8f607f`
+- Public release manifest SHA-256:
+  `82e8f7fed0d470aa4b3ba511977c4e6c71d53a15c913450702dc058a50c0f30d`
+- Deterministic public ZIP SHA-256:
+  `a402c31de998f4392ca66798ae8c6db18d227ccc634415d322d82b6b55520481`
 - One-time access ID: `60f1c499121383188c0c6ec6`
 - Internal-test access sequence: `1`
 - Additional internal-test access authorized: `false`
@@ -94,6 +100,8 @@ biocoder multimodal show-results --release-root "<public-release-root>"
 `archive-final` emits a deterministic ZIP and a manifest-bound directory containing only aggregate
 metrics and cryptographic identifiers. It excludes raw chromatograms, ROI images, labels,
 per-record predictions, model weights, private detector source, and machine-specific paths.
+The materialized v1 capsule was independently verified after creation; its release-manifest and
+ZIP hashes are recorded in the evidence identity above.
 
 Interactive model/tool serving inside the BioCoder chat agent remains a separate product gate. The
 research pipeline is directly runnable from this repository; it is not yet represented as a

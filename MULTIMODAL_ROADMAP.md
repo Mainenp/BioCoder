@@ -8,9 +8,11 @@ five-candidate protocol opened the internal test exactly once, completed the dec
 and sealed its access ledger to final report SHA-256
 `78e0100e971cb1a6cc37e93775997c54c3e0db12e491ea77f6944706ab4465d2`.
 Public-safe verification and deterministic archive entry points are available through
-`biocoder multimodal`. BioCoder agent integration and its T24 tool/abstention/evidence evaluation
-remain a separate promotion gate. Any reinforcement-learning work belongs to v2 and must use a new
-sealed test rather than reopening or selecting against v1.
+`biocoder multimodal`. The resulting public ZIP was materialized and verified at SHA-256
+`a402c31de998f4392ca66798ae8c6db18d227ccc634415d322d82b6b55520481`. BioCoder agent
+integration and its T24 tool/abstention/evidence evaluation remain a separate promotion gate. Any
+reinforcement-learning work belongs to v2 and must use a new sealed test rather than reopening or
+selecting against v1.
 
 ## Verified Phase A snapshot
 
