@@ -35,6 +35,9 @@ class RLRewardResult:
     full_height: bool | None = None
     interval_iou: float | None = None
     interval_giou: float | None = None
+    predicted_interval_width: float | None = None
+    expected_interval_width: float | None = None
+    interval_width_ratio: float | None = None
     iou_at_0_5_bonus: float = 0.0
     iou_at_0_75_bonus: float = 0.0
 
@@ -110,6 +113,9 @@ def score_rl_response(
             [predicted_box[0], predicted_box[2]],
             [expected_box[0], expected_box[2]],
         )
+        predicted_width = float(predicted_box[2] - predicted_box[0])
+        expected_width = float(expected_box[2] - expected_box[0])
+        _require(expected_width > 0.0, "Expected grounding interval has no width")
         bonus_0_5 = 0.2 if iou >= 0.5 else 0.0
         bonus_0_75 = 0.2 if iou >= 0.75 else 0.0
         return RLRewardResult(
@@ -123,6 +129,9 @@ def score_rl_response(
             full_height=True,
             interval_iou=iou,
             interval_giou=giou,
+            predicted_interval_width=predicted_width,
+            expected_interval_width=expected_width,
+            interval_width_ratio=predicted_width / expected_width,
             iou_at_0_5_bonus=bonus_0_5,
             iou_at_0_75_bonus=bonus_0_75,
         )
@@ -140,4 +149,3 @@ def score_rl_response(
         schema_valid=schema_valid,
         exact_match=exact_match,
     )
-

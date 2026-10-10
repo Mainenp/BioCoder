@@ -52,6 +52,9 @@ class RLRewardTests(unittest.TestCase):
     def test_grounding_threshold_bonuses_are_exact(self) -> None:
         at_half = self._grounding([20, 0, 60, 20])
         self.assertAlmostEqual(at_half.interval_iou, 0.5)
+        self.assertEqual(at_half.predicted_interval_width, 40.0)
+        self.assertEqual(at_half.expected_interval_width, 20.0)
+        self.assertEqual(at_half.interval_width_ratio, 2.0)
         self.assertEqual(at_half.iou_at_0_5_bonus, 0.2)
         self.assertEqual(at_half.iou_at_0_75_bonus, 0.0)
 

@@ -359,10 +359,10 @@ class XicSamplingRuntime:
                         probabilities, num_samples=1, generator=generator
                     )
                     token_id = int(next_token.item())
+                    generated.append(token_id)
                     if token_id in eos_ids:
                         terminated = True
                         break
-                    generated.append(token_id)
                     current_mask = torch.cat(
                         (
                             current_mask,
@@ -394,4 +394,3 @@ class XicSamplingRuntime:
                     )
                 )
         return completions
-
