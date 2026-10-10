@@ -22,7 +22,10 @@ def _write_json(path: Path, payload: dict[str, object]) -> None:
 
 
 def _source_sequence_run(
-    root: Path, *, include_report_in_manifest: bool = True
+    root: Path,
+    *,
+    include_report_in_manifest: bool = True,
+    manifest_dot_prefix: bool = False,
 ) -> tuple[str, str]:
     rows = [
         {
@@ -69,7 +72,8 @@ def _source_sequence_run(
         manifest_paths.insert(0, report)
     manifest.write_text(
         "".join(
-            f"{sha256_file(path)}  {path.name}\n"
+            f"{sha256_file(path)}  "
+            f"{'./' if manifest_dot_prefix else ''}{path.name}\n"
             for path in manifest_paths
         ),
         encoding="utf-8",
@@ -78,6 +82,54 @@ def _source_sequence_run(
 
 
 class SequencePromptContractTests(unittest.TestCase):
+    def test_builder_normalizes_recovery_manifest_dot_paths(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "source"
+            source.mkdir()
+            report_sha, manifest_sha = _source_sequence_run(
+                source,
+                include_report_in_manifest=False,
+                manifest_dot_prefix=True,
+            )
+
+            result = build_sequence_prompt_bundle(
+                sequence_run_root=source,
+                sequence_report_sha256=report_sha,
+                sequence_manifest_sha256=manifest_sha,
+                output_dir=root / "bundle",
+                code_revision="a" * 40,
+            )
+
+            report = json.loads(result.report_path.read_text(encoding="utf-8"))
+            self.assertTrue(report["contracts"]["source_predictions_manifest_bound"])
+
+    def test_builder_rejects_duplicate_normalized_manifest_paths(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "source"
+            source.mkdir()
+            report_sha, _ = _source_sequence_run(
+                source,
+                include_report_in_manifest=False,
+            )
+            predictions = source / "validation_predictions.jsonl"
+            manifest = source / "artifact_manifest.sha256"
+            digest = sha256_file(predictions)
+            manifest.write_text(
+                f"{digest}  {predictions.name}\n{digest}  ./{predictions.name}\n",
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(ValueError, "Duplicate normalized"):
+                build_sequence_prompt_bundle(
+                    sequence_run_root=source,
+                    sequence_report_sha256=report_sha,
+                    sequence_manifest_sha256=sha256_file(manifest),
+                    output_dir=root / "bundle",
+                    code_revision="a" * 40,
+                )
+
     def test_builder_accepts_report_pinned_separately_from_recovery_manifest(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

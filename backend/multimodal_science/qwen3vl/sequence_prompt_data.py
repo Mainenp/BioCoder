@@ -80,10 +80,14 @@ def _verify_manifest(root: Path, expected_sha256: str) -> dict[str, str]:
         _require(len(parts) == 2, f"Malformed sequence manifest line: {line_number}")
         digest, relative = parts
         _require(bool(_HEX_64.fullmatch(digest)), f"Bad manifest digest: {line_number}")
-        _require(relative not in entries, f"Duplicate sequence artifact: {relative}")
         artifact = _safe_artifact(root, relative, "sequence artifact")
         _require(sha256_file(artifact) == digest, f"Sequence artifact hash mismatch: {relative}")
-        entries[relative] = digest
+        canonical = artifact.relative_to(root).as_posix()
+        _require(
+            canonical not in entries,
+            f"Duplicate normalized sequence artifact: {canonical}",
+        )
+        entries[canonical] = digest
     return entries
 
 
@@ -149,7 +153,11 @@ def build_sequence_prompt_bundle(
     )
     source_path = _safe_artifact(root, relative, "sequence predictions")
     _require(sha256_file(source_path) == source_digest, "Source prediction hash mismatch")
-    _require(manifest.get(relative) == source_digest, "Source predictions are not manifest-bound")
+    source_manifest_path = source_path.relative_to(root).as_posix()
+    _require(
+        manifest.get(source_manifest_path) == source_digest,
+        "Source predictions are not manifest-bound",
+    )
 
     clean_rows: list[dict[str, Any]] = []
     seen_assets: set[str] = set()
