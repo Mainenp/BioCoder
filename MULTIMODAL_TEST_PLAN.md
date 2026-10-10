@@ -335,7 +335,9 @@ The versioned scientific report must contain:
   manifest verification passed with report SHA-256
   `a1ede9932c23b69d827232292208973c272be52253883425cd4c9a6930eb2842` and manifest SHA-256
   `fc9539667b1e2f6f129db0de80119b83a9bb8dba4f5f7db5d1344da00ebce3d9`. The report records
-  `internal_test_accessed=false` and `final_benchmark_eligible=false`.
+  `internal_test_accessed=false` and `final_benchmark_eligible=false`. The deterministic public ZIP
+  was generated twice with identical bytes and independently verified at SHA-256
+  `cc859013f869480cc82b97cd3edf6f866e9e4023e26c2b80719f8cc1b4ccb094`.
 
 ### T24 — Agent report
 

@@ -122,3 +122,8 @@ XIC interventions, gate values, wall times, and the negative auxiliary-projector
 and strict completion boundary remain in
 [MULTIMODAL_V11_EXPERIMENTS.md](MULTIMODAL_V11_EXPERIMENTS.md). None of these artifacts modifies,
 extends, or reopens the one-time internal-test benchmark.
+
+The materialized deterministic archive is
+`biocoder-multimodal-v1.1-development-a1ede9932c23.zip`, SHA-256
+`cc859013f869480cc82b97cd3edf6f866e9e4023e26c2b80719f8cc1b4ccb094`. It contains only the
+path-free public report, rendered Markdown, and manifest.

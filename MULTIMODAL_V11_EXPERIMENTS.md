@@ -46,6 +46,12 @@ Markdown, and `sha256sum -c` manifest:
   `a1ede9932c23b69d827232292208973c272be52253883425cd4c9a6930eb2842`
 - Public development manifest SHA-256:
   `fc9539667b1e2f6f129db0de80119b83a9bb8dba4f5f7db5d1344da00ebce3d9`
+- Rendered public development Markdown SHA-256:
+  `bf22cdb7a74cb7d6ffcfa0fb6ba69b85a6f41a12cbab3a66fb16beff6524c082`
+- Deterministic public archive:
+  `biocoder-multimodal-v1.1-development-a1ede9932c23.zip`
+- Deterministic public archive SHA-256:
+  `cc859013f869480cc82b97cd3edf6f866e9e4023e26c2b80719f8cc1b4ccb094`
 - Internal-test accessed: `false`
 - Final-benchmark eligible: `false`
 

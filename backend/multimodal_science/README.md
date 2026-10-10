@@ -1129,6 +1129,10 @@ protocol and completion gate, and
 The completed path-free report SHA-256 is
 `a1ede9932c23b69d827232292208973c272be52253883425cd4c9a6930eb2842`; its source artifact
 manifest SHA-256 is `fc9539667b1e2f6f129db0de80119b83a9bb8dba4f5f7db5d1344da00ebce3d9`.
+The rendered Markdown SHA-256 is
+`bf22cdb7a74cb7d6ffcfa0fb6ba69b85a6f41a12cbab3a66fb16beff6524c082`. The materialized
+deterministic archive is `biocoder-multimodal-v1.1-development-a1ede9932c23.zip`, SHA-256
+`cc859013f869480cc82b97cd3edf6f866e9e4023e26c2b80719f8cc1b4ccb094`.
 Use the main product CLI to verify, display, or deterministically package that already-materialized
 evidence without loading a model or opening a dataset:
 
