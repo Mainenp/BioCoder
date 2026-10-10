@@ -109,10 +109,16 @@ production FastAPI or LangGraph tool.
 
 ## Post-seal development extensions
 
-The sealed v1 table above is immutable. Two post-seal, validation-only controls—current-sample
-XIC-only Qwen and image-LoRA with frozen SequencePeakNet predictions in the prompt—are specified
-in [MULTIMODAL_V11_EXPERIMENTS.md](MULTIMODAL_V11_EXPERIMENTS.md). That page also records the
-full LoRA/fusion wall-clock measurements, selected-checkpoint XIC interventions, gate values, and
-auxiliary-projector comparison, and defines the manifest-verified exporter for the exact
-three-seed and one/four/eight-token development tables. None of those rows modifies or extends the
-one-time internal-test benchmark.
+The sealed v1 table above is immutable. The two post-seal, validation-only controls are complete:
+current-sample XIC-only Qwen reached overall presence Macro-F1 `0.9291` and mean IoU `0.7163`;
+image-LoRA with frozen SequencePeakNet predictions in the prompt reached Macro-F1 `0.9401` and QC
+exact match `0.9686`, but mean IoU `0.5100`. These values are not new sealed-test rows.
+
+The complete V1.1 evidence—including three-seed mean ± sample SD, 1/4/8-token results, all four
+XIC interventions, gate values, wall times, and the negative auxiliary-projector result—is in
+[MULTIMODAL_V11_RESULTS.md](MULTIMODAL_V11_RESULTS.md). Its path-free report SHA-256 is
+`a1ede9932c23b69d827232292208973c272be52253883425cd4c9a6930eb2842`, and its manifest SHA-256 is
+`fc9539667b1e2f6f129db0de80119b83a9bb8dba4f5f7db5d1344da00ebce3d9`. The experimental protocol
+and strict completion boundary remain in
+[MULTIMODAL_V11_EXPERIMENTS.md](MULTIMODAL_V11_EXPERIMENTS.md). None of these artifacts modifies,
+extends, or reopens the one-time internal-test benchmark.

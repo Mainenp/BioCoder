@@ -3,8 +3,10 @@ from __future__ import annotations
 import json
 import tempfile
 import unittest
+import zipfile
 from pathlib import Path
 
+from biocoder.cli import build_parser as build_biocoder_parser
 from multimodal_science.data.manifest import sha256_file
 from multimodal_science.qwen3vl.auxiliary_pretraining import (
     AUXILIARY_PRETRAINING_REPORT_SCHEMA,
@@ -15,7 +17,9 @@ from multimodal_science.qwen3vl.fusion_training import FUSION_TRAINING_REPORT_SC
 from multimodal_science.qwen3vl.lora_training import LORA_TRAINING_REPORT_SCHEMA
 from multimodal_science.qwen3vl.public_development_evidence import (
     PUBLIC_DEVELOPMENT_EVIDENCE_SCHEMA,
+    build_public_development_evidence_archive,
     build_public_development_evidence,
+    verify_public_development_evidence,
 )
 
 
@@ -292,6 +296,113 @@ class PublicDevelopmentEvidenceTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "supplied together"):
                 build_public_development_evidence(
                     **inputs, output_dir=root / "public-third"
+                )
+
+    def test_verifies_and_deterministically_archives_complete_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            inputs = self._fixture(root)
+            result = build_public_development_evidence(
+                **inputs, output_dir=root / "public"
+            )
+
+            verified = verify_public_development_evidence(
+                evidence_root=result.output_dir,
+                expected_report_sha256=result.report_sha256,
+            )
+            self.assertEqual(verified.report_sha256, result.report_sha256)
+            self.assertIsNone(verified.archive_sha256)
+
+            first = build_public_development_evidence_archive(
+                evidence_root=result.output_dir,
+                expected_report_sha256=result.report_sha256,
+                archive_path=root / "first.zip",
+            )
+            second = build_public_development_evidence_archive(
+                evidence_root=result.output_dir,
+                expected_report_sha256=result.report_sha256,
+                archive_path=root / "second.zip",
+            )
+            self.assertEqual(first.archive_sha256, second.archive_sha256)
+            with zipfile.ZipFile(root / "first.zip") as archive:
+                self.assertEqual(
+                    set(archive.namelist()),
+                    {
+                        "biocoder-multimodal-v1.1-development/"
+                        "artifact_manifest.sha256",
+                        "biocoder-multimodal-v1.1-development/"
+                        "public_development_evidence.json",
+                        "biocoder-multimodal-v1.1-development/"
+                        "public_development_evidence.md",
+                    },
+                )
+
+            result.markdown_path.write_text("tampered\n", encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "Artifact hash mismatch"):
+                verify_public_development_evidence(
+                    evidence_root=result.output_dir,
+                    expected_report_sha256=result.report_sha256,
+                )
+
+    def test_biocoder_exposes_development_evidence_commands(self) -> None:
+        parser = build_biocoder_parser()
+        verified = parser.parse_args(
+            [
+                "multimodal",
+                "verify-development",
+                "--evidence-root",
+                "evidence",
+                "--report-sha256",
+                "a" * 64,
+            ]
+        )
+        self.assertEqual(verified.multimodal_command, "verify-development")
+        archived = parser.parse_args(
+            [
+                "multimodal",
+                "archive-development",
+                "--evidence-root",
+                "evidence",
+                "--report-sha256",
+                "a" * 64,
+                "--archive",
+                "evidence.zip",
+            ]
+        )
+        self.assertEqual(archived.multimodal_command, "archive-development")
+        shown = parser.parse_args(
+            [
+                "multimodal",
+                "show-development",
+                "--evidence-root",
+                "evidence",
+                "--report-sha256",
+                "a" * 64,
+            ]
+        )
+        self.assertEqual(shown.multimodal_command, "show-development")
+
+    def test_verifier_rejects_hash_bound_machine_paths(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            inputs = self._fixture(root)
+            result = build_public_development_evidence(
+                **inputs, output_dir=root / "public"
+            )
+            report = json.loads(result.report_path.read_text(encoding="utf-8"))
+            report["debug_path"] = "/home/private/development-run"
+            _write_json(result.report_path, report)
+            result.manifest_path.write_text(
+                "".join(
+                    f"{sha256_file(path)}  {path.name}\n"
+                    for path in (result.report_path, result.markdown_path)
+                ),
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(ValueError, "machine-specific path"):
+                verify_public_development_evidence(
+                    evidence_root=result.output_dir,
+                    expected_report_sha256=sha256_file(result.report_path),
                 )
 
     def test_slurm_publisher_is_cpu_only_and_never_opens_internal_test(self) -> None:

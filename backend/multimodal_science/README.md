@@ -1123,7 +1123,33 @@ python -m multimodal_science.qwen3vl.build_public_development_evidence_cli \
 
 The report is a development artifact and cannot be merged into or used to revise the sealed v1
 table. See [`MULTIMODAL_V11_EXPERIMENTS.md`](../../MULTIMODAL_V11_EXPERIMENTS.md) for the measured
-wall times, intervention rows, auxiliary result, and completion gate.
+protocol and completion gate, and
+[`MULTIMODAL_V11_RESULTS.md`](../../MULTIMODAL_V11_RESULTS.md) for the complete verified tables.
+
+The completed path-free report SHA-256 is
+`a1ede9932c23b69d827232292208973c272be52253883425cd4c9a6930eb2842`; its source artifact
+manifest SHA-256 is `fc9539667b1e2f6f129db0de80119b83a9bb8dba4f5f7db5d1344da00ebce3d9`.
+Use the main product CLI to verify, display, or deterministically package that already-materialized
+evidence without loading a model or opening a dataset:
+
+```bash
+biocoder multimodal verify-development \
+  --evidence-root "<public-development-evidence-root>" \
+  --report-sha256 "a1ede9932c23b69d827232292208973c272be52253883425cd4c9a6930eb2842"
+
+biocoder multimodal show-development \
+  --evidence-root "<public-development-evidence-root>" \
+  --report-sha256 "a1ede9932c23b69d827232292208973c272be52253883425cd4c9a6930eb2842"
+
+biocoder multimodal archive-development \
+  --evidence-root "<public-development-evidence-root>" \
+  --report-sha256 "a1ede9932c23b69d827232292208973c272be52253883425cd4c9a6930eb2842" \
+  --archive "<public-development-evidence.zip>"
+```
+
+`archive-development` uses fixed ZIP metadata and stored entries, so identical verified evidence
+produces a byte-identical archive across supported hosts. The archive contains only the JSON,
+Markdown, and their manifest.
 
 On Slurm, export the seven required `BIOCODER_*` roots/revision variables and, optionally, all
 three auxiliary evidence roots and both post-seal control evaluation roots, then submit
@@ -1176,3 +1202,7 @@ arguments, abstention, trajectory quality, evidence attribution, or UI behavior.
 pipeline is runnable through its CLIs and Slurm scripts; it is not yet a production FastAPI or
 LangGraph chromatogram tool. Reinforcement learning is explicitly a v2 experiment and requires a
 new sealed test set.
+
+Post-seal V1.1 validation evidence is independently complete and inspectable through the three
+development commands above. It remains ineligible for the final benchmark and never changes the
+completed V1 release capsule.

@@ -11,6 +11,10 @@ from multimodal_science.final_benchmark_release import (
     verify_final_benchmark_evidence,
     verify_public_release,
 )
+from multimodal_science.qwen3vl.public_development_evidence import (
+    build_public_development_evidence_archive,
+    verify_public_development_evidence,
+)
 
 
 def _add_source_arguments(command: argparse.ArgumentParser) -> None:
@@ -18,6 +22,11 @@ def _add_source_arguments(command: argparse.ArgumentParser) -> None:
     command.add_argument("--protocol-sha256", required=True)
     command.add_argument("--ledger-dir", type=Path, required=True)
     command.add_argument("--report-root", type=Path, required=True)
+
+
+def _add_development_arguments(command: argparse.ArgumentParser) -> None:
+    command.add_argument("--evidence-root", type=Path, required=True)
+    command.add_argument("--report-sha256", required=True)
 
 
 def add_release_subcommands(subparsers: argparse._SubParsersAction) -> None:
@@ -41,6 +50,24 @@ def add_release_subcommands(subparsers: argparse._SubParsersAction) -> None:
     )
     results.add_argument("--release-root", type=Path, required=True)
     results.add_argument("--archive", type=Path)
+    verify_development = subparsers.add_parser(
+        "verify-development",
+        help="Verify the standalone validation-only v1.1 evidence.",
+    )
+    _add_development_arguments(verify_development)
+    verify_development.add_argument("--archive", type=Path)
+    archive_development = subparsers.add_parser(
+        "archive-development",
+        help="Build a deterministic ZIP from verified v1.1 evidence.",
+    )
+    _add_development_arguments(archive_development)
+    archive_development.add_argument("--archive", type=Path, required=True)
+    show_development = subparsers.add_parser(
+        "show-development",
+        help="Verify and print the validation-only v1.1 evidence table.",
+    )
+    _add_development_arguments(show_development)
+    show_development.add_argument("--archive", type=Path)
 
 
 def dispatch_release_command(args: argparse.Namespace) -> None:
@@ -68,6 +95,27 @@ def dispatch_release_command(args: argparse.Namespace) -> None:
         )
         if args.multimodal_command == "show-results":
             print((args.release_root / "benchmark_table.md").read_text(encoding="utf-8"))
+        else:
+            print(json.dumps(result.as_dict(), ensure_ascii=False, indent=2, sort_keys=True))
+    elif args.multimodal_command == "archive-development":
+        result = build_public_development_evidence_archive(
+            evidence_root=args.evidence_root,
+            expected_report_sha256=args.report_sha256,
+            archive_path=args.archive,
+        )
+        print(json.dumps(result.as_dict(), ensure_ascii=False, indent=2, sort_keys=True))
+    elif args.multimodal_command in {"verify-development", "show-development"}:
+        result = verify_public_development_evidence(
+            evidence_root=args.evidence_root,
+            expected_report_sha256=args.report_sha256,
+            archive_path=args.archive,
+        )
+        if args.multimodal_command == "show-development":
+            print(
+                (args.evidence_root / "public_development_evidence.md").read_text(
+                    encoding="utf-8"
+                )
+            )
         else:
             print(json.dumps(result.as_dict(), ensure_ascii=False, indent=2, sort_keys=True))
     else:  # pragma: no cover - argparse enforces the command set

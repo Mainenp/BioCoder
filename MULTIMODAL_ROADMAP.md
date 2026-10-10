@@ -14,6 +14,12 @@ integration and its T24 tool/abstention/evidence evaluation remain a separate pr
 reinforcement-learning work belongs to v2 and must use a new sealed test rather than reopening or
 selecting against v1.
 
+Post-seal V1.1 development controls are also complete on the unchanged validation split. The
+path-free report and manifest SHA-256 values are respectively
+`a1ede9932c23b69d827232292208973c272be52253883425cd4c9a6930eb2842` and
+`fc9539667b1e2f6f129db0de80119b83a9bb8dba4f5f7db5d1344da00ebce3d9`; they carry
+`internal_test_accessed=false` and do not revise the V1 benchmark.
+
 ## Verified Phase A snapshot
 
 The first authorized raw-data audit produced dataset version `raw-072fee8e`:
@@ -411,7 +417,7 @@ machine-specific paths.
 
 ### Phase 10 — Post-seal v1.1 modality controls
 
-V1 remains sealed. V1.1 adds two development-only controls on the existing leakage-safe
+Status: complete. V1 remains sealed. V1.1 adds two development-only controls on the existing leakage-safe
 validation split: Qwen with aligned XIC but no current-sample image input, and image-only LoRA with
 frozen SequencePeakNet predictions serialized into the prompt. The former installs a fail-closed
 visual-tower execution guard; the latter exports only three prediction fields from a manifest-bound
@@ -422,8 +428,9 @@ The public development-evidence exporter joins the already completed three-seed 
 one/four/eight-token ablation, selected-checkpoint XIC interventions, uncapped training wall times,
 and optional auxiliary-projector comparison into path-free JSON and Markdown. It recomputes no
 metric from informal logs and rejects step-capped or internal-test artifacts. The full protocol and
-current measured values are maintained in
-[MULTIMODAL_V11_EXPERIMENTS.md](MULTIMODAL_V11_EXPERIMENTS.md).
+measured protocol is maintained in
+[MULTIMODAL_V11_EXPERIMENTS.md](MULTIMODAL_V11_EXPERIMENTS.md), and the exact completed tables are
+published in [MULTIMODAL_V11_RESULTS.md](MULTIMODAL_V11_RESULTS.md).
 
 ## Acceptance criteria
 
@@ -444,5 +451,9 @@ V1.1 adds a separate development gate: both new controls must cover all 13,708 v
 verify exact manifests, preserve answer isolation, and be reported regardless of whether they
 improve the selected fusion candidate. Passing that gate does not authorize another internal-test
 access or alter AC-01 through AC-10 for v1.
+
+That V1.1 gate passed: both controls completed 13,708 prompts, answer-separated evaluations and
+manifests verified, and the negative auxiliary-initialization result was retained in the public
+evidence rather than omitted.
 
 The corresponding verification matrix is maintained in [MULTIMODAL_TEST_PLAN.md](MULTIMODAL_TEST_PLAN.md).

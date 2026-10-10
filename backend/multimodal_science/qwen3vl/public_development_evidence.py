@@ -6,6 +6,8 @@ import json
 import math
 import re
 import tempfile
+import zipfile
+from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any
@@ -25,6 +27,22 @@ from multimodal_science.qwen3vl.lora_training import LORA_TRAINING_REPORT_SCHEMA
 PUBLIC_DEVELOPMENT_EVIDENCE_SCHEMA = "chrompeak-public-development-evidence-v1"
 _HEX_64 = re.compile(r"^[0-9a-f]{64}$")
 _SCOPES = ("overall", "en", "zh-CN")
+_PUBLIC_DEVELOPMENT_FILES = {
+    "public_development_evidence.json",
+    "public_development_evidence.md",
+}
+_PUBLIC_DEVELOPMENT_ARCHIVE_PREFIX = "biocoder-multimodal-v1.1-development"
+_REQUIRED_PUBLIC_CONTRACTS = {
+    "three_training_seeds": [17, 29, 43],
+    "sample_standard_deviation_ddof": 1,
+    "token_ablation_training_seed": 17,
+    "selected_checkpoint_interventions": True,
+    "path_free_public_payload": True,
+    "language_variants_are_paired_views": True,
+    "sealed_internal_test_reopened": False,
+    "post_seal_controls_complete": True,
+    "internal_test_accessed": False,
+}
 _PRIMARY_METRICS = (
     ("peak_presence", "balanced_accuracy", "Presence balanced accuracy"),
     ("peak_presence", "macro_f1", "Presence Macro-F1"),
@@ -45,6 +63,31 @@ class PublicDevelopmentEvidenceResult:
     report_sha256: str
     markdown_path: Path
     manifest_path: Path
+
+
+@dataclass(frozen=True)
+class PublicDevelopmentEvidenceVerification:
+    evidence_root: Path
+    report_sha256: str
+    markdown_sha256: str
+    manifest_sha256: str
+    archive_path: Path | None
+    archive_sha256: str | None
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "evidence_root": str(self.evidence_root),
+            "report_sha256": self.report_sha256,
+            "markdown_sha256": self.markdown_sha256,
+            "manifest_sha256": self.manifest_sha256,
+            "archive_path": (
+                None if self.archive_path is None else str(self.archive_path)
+            ),
+            "archive_sha256": self.archive_sha256,
+            "development_comparison_eligible": True,
+            "final_benchmark_eligible": False,
+            "internal_test_accessed": False,
+        }
 
 
 def _require(condition: bool, message: str) -> None:
@@ -270,7 +313,8 @@ def _markdown(report: dict[str, Any]) -> str:
         "| --- | --- | ---: | ---: | ---: | ---: |",
     ]
     for scope in _SCOPES:
-        for label, values in report["three_seed_statistics"][scope].items():
+        for _, _, label in _PRIMARY_METRICS:
+            values = report["three_seed_statistics"][scope][label]
             by_seed = values["values_by_seed"]
             lines.append(
                 f"| {scope} | {label} | {values['mean']:.4f} ± "
@@ -396,6 +440,193 @@ def _markdown(report: dict[str, Any]) -> str:
         ]
     )
     return "\n".join(lines)
+
+
+def _iter_strings(value: Any) -> Iterator[str]:
+    if isinstance(value, str):
+        yield value
+    elif isinstance(value, dict):
+        for key, item in value.items():
+            yield from _iter_strings(key)
+            yield from _iter_strings(item)
+    elif isinstance(value, list):
+        for item in value:
+            yield from _iter_strings(item)
+
+
+def _verify_path_free_payload(report: dict[str, Any]) -> None:
+    for value in _iter_strings(report):
+        normalized = value.replace("\\", "/")
+        looks_like_drive_path = bool(re.match(r"^[A-Za-z]:/", normalized))
+        looks_like_machine_root = normalized.startswith(
+            ("/home/", "/tmp/", "/Users/", "/var/", "/mnt/")
+        )
+        _require(
+            not looks_like_drive_path and not looks_like_machine_root,
+            "Public development evidence contains a machine-specific path",
+        )
+
+
+def verify_public_development_evidence(
+    *,
+    evidence_root: Path,
+    expected_report_sha256: str,
+    archive_path: Path | None = None,
+) -> PublicDevelopmentEvidenceVerification:
+    """Verify the standalone v1.1 evidence without opening any source dataset."""
+
+    evidence_root = evidence_root.resolve()
+    _require(
+        bool(_HEX_64.fullmatch(expected_report_sha256)),
+        "Expected development report SHA-256 must be lowercase hexadecimal",
+    )
+    report, entries = _verify_root(
+        evidence_root, "public_development_evidence.json"
+    )
+    _require(
+        set(entries) == _PUBLIC_DEVELOPMENT_FILES,
+        "Public development evidence artifact set drift",
+    )
+    report_sha256 = entries["public_development_evidence.json"]
+    _require(report_sha256 == expected_report_sha256, "Development report SHA-256 drift")
+    _require(
+        report.get("schema_version") == PUBLIC_DEVELOPMENT_EVIDENCE_SCHEMA,
+        "Unexpected public development evidence schema",
+    )
+    _require(
+        report.get("evaluation_scope")
+        == "leakage_safe_validation_public_evidence",
+        "Unexpected public development evidence scope",
+    )
+    _development_only(report, "public development evidence")
+    _require(
+        report.get("development_comparison_eligible") is True,
+        "Public development evidence is ineligible",
+    )
+    contracts = _object(report.get("contracts"), "public development contracts")
+    for field, expected in _REQUIRED_PUBLIC_CONTRACTS.items():
+        _require(contracts.get(field) == expected, f"Development contract drift: {field}")
+    _require(
+        set(_object(report.get("three_seed_statistics"), "three-seed statistics"))
+        == set(_SCOPES),
+        "Three-seed scope drift",
+    )
+    _require(
+        set(_object(report.get("sensor_token_ablation"), "sensor-token ablation"))
+        == {"1", "4", "8"},
+        "Sensor-token row drift",
+    )
+    _require(
+        set(_object(report.get("xic_interventions"), "XIC interventions"))
+        == {"aligned", "shuffled", "zero", "availability-off"},
+        "XIC intervention row drift",
+    )
+    _object(report.get("auxiliary_projector_ablation"), "auxiliary-projector ablation")
+    _require(
+        set(_object(report.get("post_seal_controls"), "post-seal controls"))
+        == {"xic_only_qwen", "image_lora_sequence_prompt"},
+        "Post-seal control row drift",
+    )
+    sources = _object(report.get("sources"), "public development sources")
+    for label, digest in sources.items():
+        _require(
+            isinstance(digest, str) and bool(_HEX_64.fullmatch(digest)),
+            f"Invalid source digest: {label}",
+        )
+    _verify_path_free_payload(report)
+
+    markdown_path = evidence_root / "public_development_evidence.md"
+    _require(
+        markdown_path.read_text(encoding="utf-8") == _markdown(report),
+        "Public development Markdown does not match the report",
+    )
+    markdown_sha256 = entries["public_development_evidence.md"]
+    manifest_path = evidence_root / "artifact_manifest.sha256"
+    manifest_sha256 = sha256_file(manifest_path)
+
+    resolved_archive = None
+    archive_sha256 = None
+    if archive_path is not None:
+        resolved_archive = archive_path.resolve()
+        _require(
+            resolved_archive.is_file(),
+            f"Public development archive not found: {resolved_archive}",
+        )
+        relatives = sorted((*_PUBLIC_DEVELOPMENT_FILES, "artifact_manifest.sha256"))
+        expected_names = {
+            f"{_PUBLIC_DEVELOPMENT_ARCHIVE_PREFIX}/{relative}"
+            for relative in relatives
+        }
+        with zipfile.ZipFile(resolved_archive, "r") as archive:
+            names = archive.namelist()
+            _require(
+                len(names) == len(expected_names) and set(names) == expected_names,
+                "Public development archive member drift",
+            )
+            for name in expected_names:
+                relative = name.split("/", 1)[1]
+                _require(
+                    archive.read(name) == (evidence_root / relative).read_bytes(),
+                    f"Public development archive content drift: {relative}",
+                )
+        archive_sha256 = sha256_file(resolved_archive)
+
+    return PublicDevelopmentEvidenceVerification(
+        evidence_root=evidence_root,
+        report_sha256=report_sha256,
+        markdown_sha256=markdown_sha256,
+        manifest_sha256=manifest_sha256,
+        archive_path=resolved_archive,
+        archive_sha256=archive_sha256,
+    )
+
+
+def build_public_development_evidence_archive(
+    *,
+    evidence_root: Path,
+    expected_report_sha256: str,
+    archive_path: Path,
+) -> PublicDevelopmentEvidenceVerification:
+    """Create a deterministic ZIP around an already verified v1.1 evidence root."""
+
+    evidence_root = evidence_root.resolve()
+    archive_path = archive_path.resolve()
+    _require(not archive_path.exists(), f"Development archive exists: {archive_path}")
+    verify_public_development_evidence(
+        evidence_root=evidence_root,
+        expected_report_sha256=expected_report_sha256,
+    )
+    archive_path.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile(
+        dir=archive_path.parent,
+        prefix=f".{archive_path.name}-",
+        suffix=".staging",
+        delete=False,
+    ) as handle:
+        staging_path = Path(handle.name)
+    try:
+        relatives = sorted((*_PUBLIC_DEVELOPMENT_FILES, "artifact_manifest.sha256"))
+        with zipfile.ZipFile(staging_path, "w") as archive:
+            for relative in relatives:
+                info = zipfile.ZipInfo(
+                    f"{_PUBLIC_DEVELOPMENT_ARCHIVE_PREFIX}/{relative}",
+                    date_time=(1980, 1, 1, 0, 0, 0),
+                )
+                info.compress_type = zipfile.ZIP_STORED
+                info.create_system = 3
+                info.external_attr = 0o100644 << 16
+                archive.writestr(info, (evidence_root / relative).read_bytes())
+        staging_path.replace(archive_path)
+        verified = verify_public_development_evidence(
+            evidence_root=evidence_root,
+            expected_report_sha256=expected_report_sha256,
+            archive_path=archive_path,
+        )
+    except BaseException:
+        staging_path.unlink(missing_ok=True)
+        archive_path.unlink(missing_ok=True)
+        raise
+    return verified
 
 
 def build_public_development_evidence(

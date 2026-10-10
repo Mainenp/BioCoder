@@ -6,7 +6,9 @@ demonstration remain open; model-benchmark eligibility alone does not satisfy th
 traceability is implemented through `MULTIMODAL_RESULTS.md` and `biocoder multimodal` release
 verification. The materialized deterministic ZIP passed standalone verification at SHA-256
 `a402c31de998f4392ca66798ae8c6db18d227ccc634415d322d82b6b55520481`. Any v2
-reinforcement-learning experiment requires a new test protocol.
+reinforcement-learning experiment requires a new test protocol. The post-seal, validation-only
+T23B controls are also complete and published in `MULTIMODAL_V11_RESULTS.md`; they do not extend
+or reopen the T23A benchmark.
 
 ## Acceptance mapping
 
@@ -329,6 +331,11 @@ The versioned scientific report must contain:
   mean/sample-SD with all seed values; one/four/eight-token seed-17 rows; aligned, shuffled, zero,
   and availability-off rows; uncapped LoRA/fusion wall time; gate values; and, when supplied, the
   auxiliary-projector comparison. It must emit no absolute paths.
+- Completion evidence: both controls produced 13,708 predictions; the exporter contract and
+  manifest verification passed with report SHA-256
+  `a1ede9932c23b69d827232292208973c272be52253883425cd4c9a6930eb2842` and manifest SHA-256
+  `fc9539667b1e2f6f129db0de80119b83a9bb8dba4f5f7db5d1344da00ebce3d9`. The report records
+  `internal_test_accessed=false` and `final_benchmark_eligible=false`.
 
 ### T24 — Agent report
 

@@ -56,7 +56,10 @@ from multimodal_science.qwen3vl.sequence_prompt_inference import (
 )
 from multimodal_science.qwen3vl.public_development_evidence import (
     PublicDevelopmentEvidenceResult,
+    PublicDevelopmentEvidenceVerification,
+    build_public_development_evidence_archive,
     build_public_development_evidence,
+    verify_public_development_evidence,
 )
 from multimodal_science.qwen3vl.sequence_prompt_data import (
     SequencePromptBundleResult,
@@ -173,7 +176,10 @@ __all__ = [
     "run_fusion_inference",
     "run_sequence_prompt_inference",
     "PublicDevelopmentEvidenceResult",
+    "PublicDevelopmentEvidenceVerification",
+    "build_public_development_evidence_archive",
     "build_public_development_evidence",
     "run_auxiliary_pretraining",
     "verify_final_benchmark_access",
+    "verify_public_development_evidence",
 ]

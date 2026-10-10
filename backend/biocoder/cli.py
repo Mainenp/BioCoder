@@ -22,6 +22,11 @@ def _add_multimodal_source_arguments(command: argparse.ArgumentParser) -> None:
     command.add_argument("--report-root", type=Path, required=True)
 
 
+def _add_multimodal_development_arguments(command: argparse.ArgumentParser) -> None:
+    command.add_argument("--evidence-root", type=Path, required=True)
+    command.add_argument("--report-sha256", required=True)
+
+
 def _add_multimodal_commands(command: argparse.ArgumentParser) -> None:
     subparsers = command.add_subparsers(dest="multimodal_command", required=True)
     verify = subparsers.add_parser(
@@ -41,6 +46,26 @@ def _add_multimodal_commands(command: argparse.ArgumentParser) -> None:
         release = subparsers.add_parser(name, help=help_text)
         release.add_argument("--release-root", type=Path, required=True)
         release.add_argument("--archive", type=Path)
+    for name, help_text, archive_required in (
+        (
+            "verify-development",
+            "Verify the standalone validation-only v1.1 evidence.",
+            False,
+        ),
+        (
+            "archive-development",
+            "Build a deterministic ZIP from verified v1.1 evidence.",
+            True,
+        ),
+        (
+            "show-development",
+            "Verify and print the validation-only v1.1 evidence table.",
+            False,
+        ),
+    ):
+        development = subparsers.add_parser(name, help=help_text)
+        _add_multimodal_development_arguments(development)
+        development.add_argument("--archive", type=Path, required=archive_required)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -51,7 +76,7 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--thread-id")
     multimodal = subparsers.add_parser(
         "multimodal",
-        help="Verify, archive, or inspect the sealed LC-MS multimodal benchmark.",
+        help="Verify, archive, or inspect LC-MS multimodal benchmark evidence.",
     )
     _add_multimodal_commands(multimodal)
     return parser

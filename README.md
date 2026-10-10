@@ -17,8 +17,8 @@ The current system focuses on evidence-based medical research. A future molecula
 - Returns source links, numbered citations, evidence summaries, and stated limitations.
 - Supports multi-turn conversations, history, attachment analysis, and evidence review.
 - Records agent trajectories and user feedback for evaluation and future model improvement.
-- Ships a hash-verified LC-MS multimodal research pipeline and a read-only CLI for verifying,
-  archiving, and inspecting its sealed benchmark evidence.
+- Ships a hash-verified LC-MS multimodal research pipeline and a source-data-free CLI for
+  verifying, archiving, and inspecting its sealed benchmark and validation addendum evidence.
 
 ## Evidence sources
 
@@ -82,7 +82,13 @@ agent promotion suite remain future product gates. Model metrics are not present
 metrics, and reinforcement learning is reserved for a separately evaluated v2 rather than tuning
 against the sealed v1 test.
 
+The post-seal V1.1 validation controls are also complete. They add three-seed uncertainty,
+1/4/8-token and XIC-intervention evidence, an XIC-only current-sample ablation, and a frozen
+SequencePeakNet-in-prompt baseline without reopening the internal test.
+
 - [Sealed benchmark results and evidence identity](MULTIMODAL_RESULTS.md)
+- [V1.1 validation-only results and evidence identity](MULTIMODAL_V11_RESULTS.md)
+- [V1.1 controlled-experiment protocol](MULTIMODAL_V11_EXPERIMENTS.md)
 - [Multimodal architecture and implementation roadmap](MULTIMODAL_ROADMAP.md)
 - [Verification, leakage-control, and ablation plan](MULTIMODAL_TEST_PLAN.md)
 
