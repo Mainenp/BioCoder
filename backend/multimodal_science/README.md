@@ -1041,6 +1041,96 @@ per-record evidence, source-grouped mean-IoU intervals, and a `sha256sum -c` com
 Counterfactual metrics are diagnostic only: they do not replace the immutable formal zero-shot
 result and must not be used to select a training protocol on validation data.
 
+## Post-seal v1.1 development controls
+
+The sealed internal-test benchmark is immutable. The following entry points operate only on the
+existing leakage-safe train/validation artifacts and always remain development-only.
+
+### Current-sample XIC-only Qwen
+
+Use the formal fusion trainer with `BIOCODER_INPUT_MODALITY=xic_only`. Keep the same image-LoRA
+initialization, fusion bundle, train rows, four sensor tokens, seed 17, and uncapped one-epoch
+settings used by the selected image + XIC run:
+
+```bash
+export BIOCODER_INPUT_MODALITY=xic_only
+export BIOCODER_SENSOR_TOKENS=4
+export BIOCODER_SEED=17
+unset BIOCODER_MAX_STEPS
+
+xic_only_train_job_id="$(sbatch --parsable \
+  --job-name=coder \
+  --output="<external-run-root>/qwen3vl/slurm/coder-xic-only-train-%j.out" \
+  --error="<external-run-root>/qwen3vl/slurm/coder-xic-only-train-%j.err" \
+  --export=ALL \
+  backend/multimodal_science/qwen3vl/slurm/coder_fusion_train.sbatch)"
+```
+
+The resulting run name begins `xic-only-full-tokens4-...`. After it completes, set
+`BIOCODER_FUSION_ADAPTER_ROOT`, `BIOCODER_FUSION_TRAINING_REPORT_SHA256`, and
+`BIOCODER_FUSION_ADAPTER_MANIFEST_SHA256` from that exact output and submit
+`coder_fusion_evaluate.sbatch` with `BIOCODER_INPUT_MODALITY=xic_only`. Training and inference use
+text-only Qwen processor calls, never forward `pixel_values` or `image_grid_thw`, and fail if a
+visual-tower forward hook fires. Source image hashes are still checked as sample-provenance joins;
+opening an image for that hash check is not a model input.
+
+This is a controlled current-sample input ablation, not a claim that the shared language adapter
+has never seen image-supervised domain training.
+
+### Image LoRA with frozen SequencePeakNet output in the prompt
+
+Set the common immutable model, prompt bundle, Dataset, assets, instruction, and image-LoRA
+variables used by full LoRA evaluation. Also set the completed sequence-only run and its hashes:
+
+```bash
+export BIOCODER_SEQUENCE_RUN_ROOT="<completed-sequence-only-run>"
+export BIOCODER_SEQUENCE_REPORT_SHA256="<scientific-report-digest>"
+export BIOCODER_SEQUENCE_MANIFEST_SHA256="<artifact-manifest-digest>"
+
+sequence_prompt_job_id="$(sbatch --parsable \
+  --job-name=coder \
+  --output="<external-run-root>/qwen3vl/slurm/coder-sequence-prompt-%j.out" \
+  --error="<external-run-root>/qwen3vl/slurm/coder-sequence-prompt-%j.err" \
+  --export=ALL \
+  backend/multimodal_science/qwen3vl/slurm/coder_sequence_prompt_evaluate.sbatch)"
+```
+
+The job first builds a manifest-bound target-free bundle from frozen SequencePeakNet validation
+predictions. Only probability and normalized interval endpoints become model-visible text. It
+then runs all 13,708 bilingual prompts with the unchanged ROI image and image-only LoRA, persists
+generation, and opens answers only in the separate evaluator.
+
+### Public development evidence
+
+`build_public_development_evidence_cli` converts the manifest-verified development dossier and
+training reports into a path-free public table. It includes the three-seed mean ± sample standard
+deviation and individual values, seed-17 one/four/eight-token rows, all four XIC interventions,
+gate values, and full uncapped LoRA/fusion wall time. Supplying all three optional auxiliary paths
+also adds the random-versus-pretrained-projector comparison:
+
+```bash
+python -m multimodal_science.qwen3vl.build_public_development_evidence_cli \
+  --development-dossier-root "<selected-checkpoint-development-dossier>" \
+  --lora-training-root "<complete-image-lora-training-root>" \
+  --fusion-training-root "<complete-image-xic-training-root>" \
+  --auxiliary-pretraining-root "<complete-auxiliary-pretraining-root>" \
+  --random-projector-evaluation-root "<random-projector-evaluation-root>" \
+  --auxiliary-projector-evaluation-root "<auxiliary-projector-evaluation-root>" \
+  --xic-only-evaluation-root "<complete-xic-only-evaluation-root>" \
+  --sequence-prompt-evaluation-root "<complete-sequence-prompt-evaluation-root>" \
+  --output-dir "<external-run-root>/comparisons/public-development-evidence-<revision>"
+```
+
+The report is a development artifact and cannot be merged into or used to revise the sealed v1
+table. See [`MULTIMODAL_V11_EXPERIMENTS.md`](../../MULTIMODAL_V11_EXPERIMENTS.md) for the measured
+wall times, intervention rows, auxiliary result, and completion gate.
+
+On Slurm, export the seven required `BIOCODER_*` roots/revision variables and, optionally, all
+three auxiliary evidence roots and both post-seal control evaluation roots, then submit
+`qwen3vl/slurm/coder_publish_development_evidence.sbatch`. It stages the exact Git revision, uses
+one CPU and no GPU request, verifies the output manifest, checks that the public JSON contains no
+machine path, and prints the canonical Markdown table into the job log.
+
 ## Current boundary
 
 Model-benchmark v1 is complete for dataset version `raw-072fee8e`. Its frozen protocol SHA-256 is

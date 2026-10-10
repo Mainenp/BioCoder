@@ -55,6 +55,9 @@ from multimodal_science.qwen3vl.sensor_projector import (
 
 FUSION_TRAINING_CONFIG_SCHEMA = "chrompeak-qwen3vl-xic-fusion-training-config-v1"
 FUSION_TRAINING_REPORT_SCHEMA = "chrompeak-qwen3vl-xic-fusion-training-v1"
+XIC_ONLY_TRAINING_CONFIG_SCHEMA = "chrompeak-qwen3vl-xic-only-training-config-v1"
+XIC_ONLY_TRAINING_REPORT_SCHEMA = "chrompeak-qwen3vl-xic-only-training-v1"
+FUSION_INPUT_MODALITIES = ("image_xic", "xic_only")
 _HEX_40 = re.compile(r"^[0-9a-f]{40}$")
 _HEX_64 = re.compile(r"^[0-9a-f]{64}$")
 
@@ -80,6 +83,7 @@ class FusionTrainingSettings:
     gradient_checkpointing: bool = True
     deterministic_warn_only: bool = True
     sensor_tokens: int = 4
+    input_modality: str = "image_xic"
 
 
 @dataclass(frozen=True)
@@ -141,6 +145,10 @@ def _validate_settings(settings: FusionTrainingSettings) -> None:
         "sensor_tokens must be one of 1, 4, or 8",
     )
     _require(
+        settings.input_modality in FUSION_INPUT_MODALITIES,
+        "input_modality must be image_xic or xic_only",
+    )
+    _require(
         settings.min_pixels >= 28 * 28 and settings.max_pixels >= settings.min_pixels,
         "Invalid image pixel bounds",
     )
@@ -148,6 +156,45 @@ def _validate_settings(settings: FusionTrainingSettings) -> None:
         settings.attention_implementation in {"sdpa", "eager"},
         "Unsupported attention implementation",
     )
+
+
+def xic_only_prompt_text(prompt: str, language: str) -> str:
+    """Return the canonical language-matched prompt for the XIC-only ablation."""
+
+    _require(prompt.count("<image>") == 1, "Bad XIC-only prompt")
+    _require(language in {"en", "zh-CN"}, "Unsupported XIC-only language")
+    statement = (
+        "Input modality: aligned XIC sensor signal only; no image pixels are available."
+        if language == "en"
+        else "输入模态：仅提供对齐的 XIC 传感器信号，不提供任何图像像素。"
+    )
+    return f"{statement}\n{prompt.replace('<image>', '', 1).strip()}"
+
+
+def _xic_only_messages(
+    record: dict[str, Any],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Build a text/XIC conversation without exposing image pixels to Qwen.
+
+    The original task wording remains intact, including declared canvas dimensions used
+    by the grounding task.  A language-matched modality statement makes the ablation
+    explicit instead of silently replacing the chromatogram with a blank image.
+    """
+
+    conversations = record.get("conversations")
+    _require(isinstance(conversations, list) and len(conversations) == 2, "Bad conversation")
+    human = _object(conversations[0], "human turn")
+    assistant = _object(conversations[1], "assistant turn")
+    _require(human.get("from") == "human" and assistant.get("from") == "gpt", "Bad roles")
+    prompt = human.get("value")
+    response = assistant.get("value")
+    _require(isinstance(prompt, str), "Bad prompt")
+    _require(isinstance(response, str) and bool(response), "Bad assistant response")
+    language = record.get("language")
+    prompt_text = xic_only_prompt_text(prompt, str(language))
+    user = {"role": "user", "content": [{"type": "text", "text": prompt_text}]}
+    answer = {"role": "assistant", "content": [{"type": "text", "text": response}]}
+    return [user], [user, answer]
 
 
 def _latest_checkpoint(output_dir: Path) -> Path | None:
@@ -397,7 +444,12 @@ def run_fusion_training(
     pretrained_projector_report_sha256: str | None = None,
     pretrained_projector_manifest_sha256: str | None = None,
 ) -> FusionTrainingResult:
-    """Train LoRA and an XIC projector without exposing validation supervision."""
+    """Train a controlled Qwen/XIC candidate without validation supervision.
+
+    ``image_xic`` preserves the original image-plus-XIC path.  ``xic_only`` uses the
+    same records, initial adapter, targets, schedule, and sensor projector while
+    withholding image pixels from both the processor and model forward pass.
+    """
 
     _validate_settings(settings)
     for value, label, pattern in (
@@ -460,7 +512,11 @@ def run_fusion_training(
     )
 
     configuration = {
-        "schema_version": FUSION_TRAINING_CONFIG_SCHEMA,
+        "schema_version": (
+            FUSION_TRAINING_CONFIG_SCHEMA
+            if settings.input_modality == "image_xic"
+            else XIC_ONLY_TRAINING_CONFIG_SCHEMA
+        ),
         "code_revision": code_revision,
         "fusion_bundle_report_sha256": fusion_bundle_report_sha256,
         "lora_bundle_report_sha256": lora_bundle_report_sha256,
@@ -736,7 +792,11 @@ def run_fusion_training(
                     previous = sha256_file(image)
                     verified_images[image] = previous
                 _require(previous == expected_image_sha256, "Training image hash mismatch")
-                prompt_messages, full_messages = _messages(record, image)
+                prompt_messages, full_messages = (
+                    _messages(record, image)
+                    if settings.input_modality == "image_xic"
+                    else _xic_only_messages(record)
+                )
                 full = processor.apply_chat_template(
                     full_messages,
                     tokenize=True,
@@ -784,19 +844,26 @@ def run_fusion_training(
                             position_token_id=position_token_id,
                         )
                     )
-                    image_grid_thw = full["image_grid_thw"].to(device)
-                    position_ids, fused_rope_delta = generation_model.model.get_rope_index(
-                        input_ids=shadow_input_ids,
-                        image_grid_thw=image_grid_thw,
-                        attention_mask=attention_mask,
+                    rope_kwargs: dict[str, Any] = {
+                        "input_ids": shadow_input_ids,
+                        "attention_mask": attention_mask,
+                    }
+                    if settings.input_modality == "image_xic":
+                        rope_kwargs["image_grid_thw"] = full["image_grid_thw"].to(device)
+                    position_ids, fused_rope_delta = (
+                        generation_model.model.get_rope_index(**rope_kwargs)
                     )
                     if mrope_contract is None:
+                        original_rope_kwargs: dict[str, Any] = {
+                            "input_ids": input_ids,
+                            "attention_mask": torch.ones_like(input_ids),
+                        }
+                        if settings.input_modality == "image_xic":
+                            original_rope_kwargs["image_grid_thw"] = rope_kwargs[
+                                "image_grid_thw"
+                            ]
                         original_position_ids, original_rope_delta = (
-                            generation_model.model.get_rope_index(
-                                input_ids=input_ids,
-                                image_grid_thw=image_grid_thw,
-                                attention_mask=torch.ones_like(input_ids),
-                            )
+                            generation_model.model.get_rope_index(**original_rope_kwargs)
                         )
                         mrope_contract = _verify_mrope_insertion(
                             original_position_ids,
@@ -806,18 +873,32 @@ def run_fusion_training(
                         )
                         _require(
                             torch.equal(original_rope_delta, fused_rope_delta),
-                            "Sensor insertion changed Qwen's multimodal RoPE delta",
+                            "Sensor insertion changed Qwen's native RoPE delta",
                         )
                         state["mrope_contract"] = mrope_contract
+                    forward_kwargs: dict[str, Any] = {
+                        "input_ids": None,
+                        "inputs_embeds": inputs_embeds,
+                        "attention_mask": attention_mask,
+                        "position_ids": position_ids,
+                        "labels": fused_labels,
+                    }
+                    if settings.input_modality == "image_xic":
+                        forward_kwargs.update(
+                            {
+                                "pixel_values": full["pixel_values"].to(device),
+                                "image_grid_thw": rope_kwargs["image_grid_thw"],
+                            }
+                        )
+                    vision_calls_before = vision_forward_calls
                     outputs = model(
-                        input_ids=None,
-                        inputs_embeds=inputs_embeds,
-                        attention_mask=attention_mask,
-                        position_ids=position_ids,
-                        labels=fused_labels,
-                        pixel_values=full["pixel_values"].to(device),
-                        image_grid_thw=image_grid_thw,
+                        **forward_kwargs,
                     )
+                    if settings.input_modality == "xic_only":
+                        _require(
+                            vision_forward_calls == vision_calls_before,
+                            "XIC-only training invoked the visual tower",
+                        )
                     raw_loss = outputs.loss
                     loss = raw_loss / accumulation_target
                 loss.backward()
@@ -906,10 +987,16 @@ def run_fusion_training(
     _require(int(state["global_step"]) == total_updates, "Fusion training stopped early")
     total_micro_batches = int(state["processed_micro_batches"])
     total_vision_forward_calls = int(state["vision_forward_calls"])
-    _require(
-        total_vision_forward_calls >= total_micro_batches,
-        "Visual path did not run every batch",
-    )
+    if settings.input_modality == "image_xic":
+        _require(
+            total_vision_forward_calls >= total_micro_batches,
+            "Visual path did not run every batch",
+        )
+    else:
+        _require(
+            total_vision_forward_calls == 0,
+            "XIC-only training invoked the visual path",
+        )
     history_records = _read_jsonl(history_path, "fusion training history")
     _require(len(history_records) == total_updates, "Training history is incomplete")
     _require(
@@ -959,7 +1046,11 @@ def run_fusion_training(
         projector.gate_logit.detach().float().sigmoid().cpu()
     )
     report = {
-        "schema_version": FUSION_TRAINING_REPORT_SCHEMA,
+        "schema_version": (
+            FUSION_TRAINING_REPORT_SCHEMA
+            if settings.input_modality == "image_xic"
+            else XIC_ONLY_TRAINING_REPORT_SCHEMA
+        ),
         "code_revision": code_revision,
         "started_at": started_at.isoformat(),
         "finished_at": finished_at.isoformat(),
@@ -1057,12 +1148,17 @@ def run_fusion_training(
             "slurm_job_id": os.environ.get("SLURM_JOB_ID"),
         },
         "contracts": {
+            "input_modality": settings.input_modality,
             "base_weights_frozen": True,
             "vision_tower_frozen": True,
             "vision_merger_frozen": True,
             "assistant_tokens_only_supervision": True,
-            "image_and_xic_forward": True,
-            "native_multimodal_rope_positions": True,
+            "image_and_xic_forward": settings.input_modality == "image_xic",
+            "xic_only_forward": settings.input_modality == "xic_only",
+            "image_pixels_forwarded": settings.input_modality == "image_xic",
+            "images_opened_for_provenance_only": settings.input_modality == "xic_only",
+            "native_multimodal_rope_positions": settings.input_modality == "image_xic",
+            "native_qwen_rope_positions": True,
             "lora_and_projector_backward": True,
             "parameter_updates_verified": True,
             "train_split_only": True,

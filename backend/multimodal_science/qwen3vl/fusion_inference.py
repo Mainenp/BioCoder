@@ -17,7 +17,12 @@ from multimodal_science.qwen3vl.fusion_data import (
     FUSION_BUNDLE_SCHEMA,
     FUSION_LINK_SCHEMA,
 )
-from multimodal_science.qwen3vl.fusion_training import FUSION_TRAINING_REPORT_SCHEMA
+from multimodal_science.qwen3vl.fusion_training import (
+    FUSION_INPUT_MODALITIES,
+    FUSION_TRAINING_REPORT_SCHEMA,
+    XIC_ONLY_TRAINING_REPORT_SCHEMA,
+    xic_only_prompt_text,
+)
 from multimodal_science.qwen3vl.inference import (
     AdapterSpec,
     BatchGenerator,
@@ -38,6 +43,7 @@ from multimodal_science.qwen3vl.sensor_projector import (
 
 
 FUSION_GENERATOR_BACKEND = "transformers-qwen3vl-image-xic"
+XIC_ONLY_GENERATOR_BACKEND = "transformers-qwen3vl-xic-only"
 XIC_INTERVENTIONS = ("aligned", "shuffled", "zero", "availability-off")
 _HEX_40_TO_64 = re.compile(r"^[0-9a-f]{40,64}$")
 _HEX_64 = re.compile(r"^[0-9a-f]{64}$")
@@ -178,9 +184,12 @@ def _projector_spec(value: Any) -> SensorProjectorSpec:
 class _FusionAdapterVerifier:
     def __init__(
         self,
+        input_modality: str = "image_xic",
         xic_intervention: dict[str, Any] | None = None,
     ) -> None:
+        _require(input_modality in FUSION_INPUT_MODALITIES, "Unsupported input modality")
         self.verified: _VerifiedFusionAdapter | None = None
+        self._input_modality = input_modality
         self._xic_intervention = (
             dict(xic_intervention) if xic_intervention is not None else None
         )
@@ -227,31 +236,49 @@ class _FusionAdapterVerifier:
             "Fusion training report hash mismatch",
         )
         report = _read_json(report_path, "fusion training report")
-        _require(
-            report.get("schema_version") == FUSION_TRAINING_REPORT_SCHEMA,
-            "Unsupported fusion training report schema",
+        expected_schema = (
+            FUSION_TRAINING_REPORT_SCHEMA
+            if self._input_modality == "image_xic"
+            else XIC_ONLY_TRAINING_REPORT_SCHEMA
         )
+        _require(report.get("schema_version") == expected_schema, "Wrong training report schema")
         _require(
             isinstance(report.get("code_revision"), str)
             and bool(_HEX_40_TO_64.fullmatch(report["code_revision"])),
             "Fusion code revision is invalid",
         )
         contracts = _object(report.get("contracts"), "fusion training contracts")
-        for name, expected in (
+        shared_contracts = (
             ("base_weights_frozen", True),
             ("vision_tower_frozen", True),
             ("vision_merger_frozen", True),
             ("assistant_tokens_only_supervision", True),
-            ("image_and_xic_forward", True),
-            ("native_multimodal_rope_positions", True),
             ("lora_and_projector_backward", True),
             ("parameter_updates_verified", True),
             ("train_split_only", True),
             ("validation_prompts_opened", False),
             ("validation_answers_opened", False),
             ("internal_test_accessed", False),
-        ):
+        )
+        for name, expected in shared_contracts:
             _require(contracts.get(name) is expected, f"Fusion contract failed: {name}")
+        if self._input_modality == "image_xic":
+            for name, expected in (
+                ("image_and_xic_forward", True),
+                ("native_multimodal_rope_positions", True),
+            ):
+                _require(contracts.get(name) is expected, f"Fusion contract failed: {name}")
+        else:
+            for name, expected in (
+                ("input_modality", "xic_only"),
+                ("image_and_xic_forward", False),
+                ("xic_only_forward", True),
+                ("image_pixels_forwarded", False),
+                ("images_opened_for_provenance_only", True),
+                ("native_multimodal_rope_positions", False),
+                ("native_qwen_rope_positions", True),
+            ):
+                _require(contracts.get(name) == expected, f"XIC-only contract failed: {name}")
         _require(
             report.get("development_training_complete") is True,
             "Fusion training is incomplete",
@@ -285,8 +312,15 @@ class _FusionAdapterVerifier:
             and training_records >= 1,
             "Fusion training-record count is invalid",
         )
+        if self._input_modality == "xic_only":
+            _require(training.get("vision_forward_calls") == 0, "XIC-only visual calls are nonzero")
         metadata = {
-            "kind": "image_xic_fusion",
+            "kind": (
+                "image_xic_fusion"
+                if self._input_modality == "image_xic"
+                else "xic_only_qwen"
+            ),
+            "input_modality": self._input_modality,
             "training_report_sha256": specification.training_report_sha256,
             "manifest_sha256": specification.manifest_sha256,
             "code_revision": report["code_revision"],
@@ -544,7 +578,9 @@ class _FusionTransformersGenerator:
         verified: _VerifiedFusionAdapter,
         validation: _ValidationInputs,
         intervention: _XicInterventionPlan,
+        input_modality: str = "image_xic",
     ) -> None:
+        _require(input_modality in FUSION_INPUT_MODALITIES, "Unsupported input modality")
         _require(settings.batch_size == 1, "Fusion inference requires batch_size=1")
         _require(not settings.do_sample, "Fusion development evaluation requires greedy decoding")
         try:
@@ -592,6 +628,18 @@ class _FusionTransformersGenerator:
         ).to(device).eval()
         self._model.config.use_cache = True
         self._generation_model = self._model.get_base_model()
+        self._input_modality = input_modality
+        self._visual_forward_calls = 0
+        self._visual_guard = None
+        if input_modality == "xic_only":
+            visual = getattr(self._generation_model, "visual", None)
+            _require(visual is not None, "Qwen visual tower was not found")
+
+            def reject_visual_forward(_module: Any, _inputs: Any) -> None:
+                self._visual_forward_calls += 1
+                raise RuntimeError("XIC-only inference invoked the visual tower")
+
+            self._visual_guard = visual.register_forward_pre_hook(reject_visual_forward)
         self._processor = AutoProcessor.from_pretrained(
             verified.processor_dir,
             trust_remote_code=False,
@@ -640,7 +688,14 @@ class _FusionTransformersGenerator:
         resolved_revision = getattr(self._generation_model.config, "_commit_hash", None)
         self._metadata = {
             "backend": "transformers",
-            "fusion_execution_backend": FUSION_GENERATOR_BACKEND,
+            "fusion_execution_backend": (
+                FUSION_GENERATOR_BACKEND
+                if input_modality == "image_xic"
+                else XIC_ONLY_GENERATOR_BACKEND
+            ),
+            "input_modality": input_modality,
+            "image_pixels_forwarded": input_modality == "image_xic",
+            "visual_tower_guard_installed": input_modality == "xic_only",
             "transformers_version": transformers_version,
             "torch_version": torch.__version__,
             "peft_version": version("peft"),
@@ -685,11 +740,17 @@ class _FusionTransformersGenerator:
             image_digest = sha256_file(request.image_path)
             self._verified_images[image_key] = image_digest
         _require(image_digest == link.get("image_sha256"), "Validation image hash mismatch")
-        text = request.prompt.replace("<image>", "", 1).strip()
-        messages = [[{"role": "user", "content": [
-            {"type": "image", "image": str(request.image_path)},
-            {"type": "text", "text": text},
-        ]}]]
+        if self._input_modality == "image_xic":
+            text = request.prompt.replace("<image>", "", 1).strip()
+            messages = [[{"role": "user", "content": [
+                {"type": "image", "image": str(request.image_path)},
+                {"type": "text", "text": text},
+            ]}]]
+        else:
+            text = xic_only_prompt_text(request.prompt, request.language)
+            messages = [[{"role": "user", "content": [
+                {"type": "text", "text": text},
+            ]}]]
         encoded = self._processor.apply_chat_template(
             messages,
             tokenize=True,
@@ -727,21 +788,34 @@ class _FusionTransformersGenerator:
                 [int(input_ids.shape[1])],
                 position_token_id=self._position_token_id,
             )
-            image_grid_thw = encoded["image_grid_thw"].to(self._device)
-            position_ids, _ = self._generation_model.model.get_rope_index(
-                input_ids=shadow_input_ids,
-                image_grid_thw=image_grid_thw,
-                attention_mask=attention_mask,
-            )
-            outputs = self._model(
-                input_ids=None,
-                inputs_embeds=inputs_embeds,
-                attention_mask=attention_mask,
-                position_ids=position_ids,
-                pixel_values=encoded["pixel_values"].to(self._device),
-                image_grid_thw=image_grid_thw,
-                use_cache=True,
-                return_dict=True,
+            rope_kwargs: dict[str, Any] = {
+                "input_ids": shadow_input_ids,
+                "attention_mask": attention_mask,
+            }
+            if self._input_modality == "image_xic":
+                rope_kwargs["image_grid_thw"] = encoded["image_grid_thw"].to(
+                    self._device
+                )
+            position_ids, _ = self._generation_model.model.get_rope_index(**rope_kwargs)
+            forward_kwargs: dict[str, Any] = {
+                "input_ids": None,
+                "inputs_embeds": inputs_embeds,
+                "attention_mask": attention_mask,
+                "position_ids": position_ids,
+                "use_cache": True,
+                "return_dict": True,
+            }
+            if self._input_modality == "image_xic":
+                forward_kwargs.update(
+                    {
+                        "pixel_values": encoded["pixel_values"].to(self._device),
+                        "image_grid_thw": rope_kwargs["image_grid_thw"],
+                    }
+                )
+            outputs = self._model(**forward_kwargs)
+            _require(
+                self._input_modality == "image_xic" or self._visual_forward_calls == 0,
+                "XIC-only inference used image pixels",
             )
             eos_ids = _eos_token_ids(self._model.generation_config.eos_token_id)
             generated: list[int] = []
@@ -799,10 +873,12 @@ def run_fusion_inference(
     resume: bool = False,
     xic_intervention: str = "aligned",
     xic_intervention_seed: int = 17,
+    input_modality: str = "image_xic",
     final_benchmark_access: FinalBenchmarkAccessSpec | None = None,
 ) -> QwenInferenceResult:
-    """Generate prompt-only validation predictions from image plus XIC inputs."""
+    """Generate answer-isolated validation predictions for image/XIC ablations."""
 
+    _require(input_modality in FUSION_INPUT_MODALITIES, "Unsupported input modality")
     _require(settings.batch_size == 1, "Fusion inference requires batch_size=1")
     _require(not settings.do_sample, "Fusion development evaluation requires greedy decoding")
     final_access = None
@@ -813,6 +889,7 @@ def run_fusion_inference(
         )
         _require(max_records is None, "Final fusion inference requires complete prompt coverage")
         _require(xic_intervention == "aligned", "Final benchmark forbids XIC interventions")
+        _require(input_modality == "image_xic", "Final benchmark forbids new ablations")
         from multimodal_science.qwen3vl.final_benchmark_protocol import (
             verify_final_benchmark_access,
         )
@@ -842,7 +919,7 @@ def run_fusion_inference(
         mode=xic_intervention,
         seed=xic_intervention_seed,
     )
-    verifier = _FusionAdapterVerifier(intervention.metadata)
+    verifier = _FusionAdapterVerifier(input_modality, intervention.metadata)
 
     def generator_factory(
         runtime_model_name_or_path: str,
@@ -859,6 +936,7 @@ def run_fusion_inference(
             verifier.verified,
             validation,
             intervention,
+            input_modality,
         )
 
     return run_qwen_inference(

@@ -11,7 +11,10 @@ from multimodal_science.qwen3vl.fusion_inference import (
     _build_xic_intervention_plan,
     _eos_token_ids,
 )
-from multimodal_science.qwen3vl.fusion_training import FUSION_TRAINING_REPORT_SCHEMA
+from multimodal_science.qwen3vl.fusion_training import (
+    FUSION_TRAINING_REPORT_SCHEMA,
+    XIC_ONLY_TRAINING_REPORT_SCHEMA,
+)
 from multimodal_science.qwen3vl.inference import AdapterSpec
 from multimodal_science.qwen3vl.run_fusion_inference_cli import parser
 
@@ -21,7 +24,7 @@ def _write_json(path: Path, value: dict[str, object]) -> None:
     path.write_text(json.dumps(value, sort_keys=True) + "\n", encoding="utf-8")
 
 
-def _make_fusion_adapter(root: Path) -> AdapterSpec:
+def _make_fusion_adapter(root: Path, input_modality: str = "image_xic") -> AdapterSpec:
     for relative, contents in (
         ("adapter/adapter_config.json", "{}\n"),
         ("adapter/adapter_model.safetensors", "adapter"),
@@ -33,7 +36,11 @@ def _make_fusion_adapter(root: Path) -> AdapterSpec:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(contents, encoding="utf-8")
     report = {
-        "schema_version": FUSION_TRAINING_REPORT_SCHEMA,
+        "schema_version": (
+            FUSION_TRAINING_REPORT_SCHEMA
+            if input_modality == "image_xic"
+            else XIC_ONLY_TRAINING_REPORT_SCHEMA
+        ),
         "code_revision": "a" * 40,
         "sources": {"fusion_bundle_report_sha256": "b" * 64},
         "model": {
@@ -48,14 +55,23 @@ def _make_fusion_adapter(root: Path) -> AdapterSpec:
                 "dropout": 0.1,
             },
         },
-        "training": {"optimizer_updates": 3396, "training_records": 54335},
+        "training": {
+            "optimizer_updates": 3396,
+            "training_records": 54335,
+            "vision_forward_calls": 54335 if input_modality == "image_xic" else 0,
+        },
         "contracts": {
             "base_weights_frozen": True,
             "vision_tower_frozen": True,
             "vision_merger_frozen": True,
             "assistant_tokens_only_supervision": True,
-            "image_and_xic_forward": True,
-            "native_multimodal_rope_positions": True,
+            "input_modality": input_modality,
+            "image_and_xic_forward": input_modality == "image_xic",
+            "xic_only_forward": input_modality == "xic_only",
+            "image_pixels_forwarded": input_modality == "image_xic",
+            "images_opened_for_provenance_only": input_modality == "xic_only",
+            "native_multimodal_rope_positions": input_modality == "image_xic",
+            "native_qwen_rope_positions": True,
             "lora_and_projector_backward": True,
             "parameter_updates_verified": True,
             "train_split_only": True,
@@ -191,6 +207,23 @@ class FusionInferenceContractTests(unittest.TestCase):
                     model_artifact_sha256="c" * 64,
                 )
 
+    def test_xic_only_adapter_requires_zero_visual_calls(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            specification = _make_fusion_adapter(root, input_modality="xic_only")
+            verifier = _FusionAdapterVerifier("xic_only")
+
+            _, metadata = verifier(
+                specification,
+                model_name_or_path="Qwen/test",
+                model_revision="modelscope-master",
+                model_artifact_sha256="c" * 64,
+            )
+
+            self.assertEqual(metadata["kind"], "xic_only_qwen")
+            self.assertEqual(metadata["input_modality"], "xic_only")
+            self.assertEqual(verifier.verified.report["training"]["vision_forward_calls"], 0)
+
     def test_eos_contract_accepts_scalar_or_sequence(self) -> None:
         self.assertEqual(_eos_token_ids(7), {7})
         self.assertEqual(_eos_token_ids([7, 8]), {7, 8})
@@ -222,11 +255,13 @@ class FusionInferenceContractTests(unittest.TestCase):
         self.assertEqual(arguments.max_new_tokens, 64)
         self.assertEqual(arguments.xic_intervention, "aligned")
         self.assertEqual(arguments.xic_intervention_seed, 17)
+        self.assertEqual(arguments.input_modality, "image_xic")
         self.assertNotIn("batch_size", destinations)
         self.assertNotIn("do_sample", destinations)
         self.assertNotIn("answer", destinations)
         self.assertNotIn("answers", destinations)
         self.assertNotIn("internal_test", destinations)
+        self.assertIn("input_modality", destinations)
 
 
 if __name__ == "__main__":

@@ -44,6 +44,11 @@ def parser() -> argparse.ArgumentParser:
         default="aligned",
     )
     parser.add_argument("--xic-intervention-seed", type=int, default=17)
+    parser.add_argument(
+        "--input-modality",
+        choices=("image_xic", "xic_only"),
+        default="image_xic",
+    )
     return parser
 
 
@@ -81,6 +86,7 @@ def main() -> None:
         resume=arguments.resume,
         xic_intervention=arguments.xic_intervention,
         xic_intervention_seed=arguments.xic_intervention_seed,
+        input_modality=arguments.input_modality,
     )
     print(
         json.dumps(

@@ -409,6 +409,22 @@ report, registry, and all five upstream evaluation manifests before emitting a d
 path-free ZIP. The release excludes raw data, labels, predictions, weights, private source, and
 machine-specific paths.
 
+### Phase 10 — Post-seal v1.1 modality controls
+
+V1 remains sealed. V1.1 adds two development-only controls on the existing leakage-safe
+validation split: Qwen with aligned XIC but no current-sample image input, and image-only LoRA with
+frozen SequencePeakNet predictions serialized into the prompt. The former installs a fail-closed
+visual-tower execution guard; the latter exports only three prediction fields from a manifest-bound
+sequence run and strips every target-derived field before prompt construction. Both reuse greedy,
+answer-separated, full-prompt validation and cannot claim final-benchmark eligibility.
+
+The public development-evidence exporter joins the already completed three-seed matrix,
+one/four/eight-token ablation, selected-checkpoint XIC interventions, uncapped training wall times,
+and optional auxiliary-projector comparison into path-free JSON and Markdown. It recomputes no
+metric from informal logs and rejects step-capped or internal-test artifacts. The full protocol and
+current measured values are maintained in
+[MULTIMODAL_V11_EXPERIMENTS.md](MULTIMODAL_V11_EXPERIMENTS.md).
+
 ## Acceptance criteria
 
 | ID | Requirement |
@@ -423,5 +439,10 @@ machine-specific paths.
 | AC-08 | At least one Qwen3-VL LoRA run and one LoRA-plus-projector run produce traceable artifacts. |
 | AC-09 | Scientific and agent reports are both present and consumed by the registry evidence gate. |
 | AC-10 | Every public metric can be traced to a dataset version, configuration, and evaluation artifact. |
+
+V1.1 adds a separate development gate: both new controls must cover all 13,708 validation prompts,
+verify exact manifests, preserve answer isolation, and be reported regardless of whether they
+improve the selected fusion candidate. Passing that gate does not authorize another internal-test
+access or alter AC-01 through AC-10 for v1.
 
 The corresponding verification matrix is maintained in [MULTIMODAL_TEST_PLAN.md](MULTIMODAL_TEST_PLAN.md).

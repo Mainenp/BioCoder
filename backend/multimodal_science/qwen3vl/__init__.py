@@ -51,6 +51,17 @@ from multimodal_science.qwen3vl.fusion_training import (
     run_fusion_training,
 )
 from multimodal_science.qwen3vl.fusion_inference import run_fusion_inference
+from multimodal_science.qwen3vl.sequence_prompt_inference import (
+    run_sequence_prompt_inference,
+)
+from multimodal_science.qwen3vl.public_development_evidence import (
+    PublicDevelopmentEvidenceResult,
+    build_public_development_evidence,
+)
+from multimodal_science.qwen3vl.sequence_prompt_data import (
+    SequencePromptBundleResult,
+    build_sequence_prompt_bundle,
+)
 from multimodal_science.qwen3vl.auxiliary_pretraining_data import (
     AuxiliaryPretrainingDatasetResult,
     build_auxiliary_pretraining_dataset,
@@ -127,6 +138,7 @@ __all__ = [
     "FinalBenchmarkProtocolResult",
     "FinalBenchmarkRuntimeContext",
     "SensorProjectorSpec",
+    "SequencePromptBundleResult",
     "build_fusion_bundle",
     "build_auxiliary_pretraining_dataset",
     "build_inference_bundle",
@@ -155,9 +167,13 @@ __all__ = [
     "load_final_benchmark_context",
     "run_lora_training",
     "build_sensor_projector",
+    "build_sequence_prompt_bundle",
     "insert_sensor_embeddings",
     "run_fusion_training",
     "run_fusion_inference",
+    "run_sequence_prompt_inference",
+    "PublicDevelopmentEvidenceResult",
+    "build_public_development_evidence",
     "run_auxiliary_pretraining",
     "verify_final_benchmark_access",
 ]

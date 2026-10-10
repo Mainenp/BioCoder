@@ -106,3 +106,13 @@ ZIP hashes are recorded in the evidence identity above.
 Interactive model/tool serving inside the BioCoder chat agent remains a separate product gate. The
 research pipeline is directly runnable from this repository; it is not yet represented as a
 production FastAPI or LangGraph tool.
+
+## Post-seal development extensions
+
+The sealed v1 table above is immutable. Two post-seal, validation-only controls—current-sample
+XIC-only Qwen and image-LoRA with frozen SequencePeakNet predictions in the prompt—are specified
+in [MULTIMODAL_V11_EXPERIMENTS.md](MULTIMODAL_V11_EXPERIMENTS.md). That page also records the
+full LoRA/fusion wall-clock measurements, selected-checkpoint XIC interventions, gate values, and
+auxiliary-projector comparison, and defines the manifest-verified exporter for the exact
+three-seed and one/four/eight-token development tables. None of those rows modifies or extends the
+one-time internal-test benchmark.

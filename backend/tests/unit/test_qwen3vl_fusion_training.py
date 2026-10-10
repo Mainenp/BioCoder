@@ -7,7 +7,10 @@ from pathlib import Path
 from multimodal_science.qwen3vl.fusion_training import (
     FUSION_TRAINING_CONFIG_SCHEMA,
     FUSION_TRAINING_REPORT_SCHEMA,
+    XIC_ONLY_TRAINING_CONFIG_SCHEMA,
+    XIC_ONLY_TRAINING_REPORT_SCHEMA,
     FusionTrainingSettings,
+    _xic_only_messages,
     _latest_checkpoint,
     _validate_settings,
 )
@@ -27,6 +30,7 @@ class FusionTrainingContractTests(unittest.TestCase):
         self.assertTrue(settings.gradient_checkpointing)
         self.assertTrue(settings.deterministic_warn_only)
         self.assertEqual(settings.sensor_tokens, 4)
+        self.assertEqual(settings.input_modality, "image_xic")
         _validate_settings(settings)
 
     def test_training_rejects_unsafe_or_nonpositive_settings(self) -> None:
@@ -38,6 +42,8 @@ class FusionTrainingContractTests(unittest.TestCase):
             _validate_settings(FusionTrainingSettings(warmup_ratio=1.0))
         with self.assertRaisesRegex(ValueError, "sensor_tokens"):
             _validate_settings(FusionTrainingSettings(sensor_tokens=2))
+        with self.assertRaisesRegex(ValueError, "input_modality"):
+            _validate_settings(FusionTrainingSettings(input_modality="blank_image"))
         for sensor_tokens in (1, 4, 8):
             _validate_settings(FusionTrainingSettings(sensor_tokens=sensor_tokens))
 
@@ -62,6 +68,7 @@ class FusionTrainingContractTests(unittest.TestCase):
         self.assertIn("resume", destinations)
         self.assertIn("max_steps", destinations)
         self.assertIn("sensor_tokens", destinations)
+        self.assertIn("input_modality", destinations)
         self.assertNotIn("validation_answers", destinations)
         self.assertNotIn("internal_test", destinations)
 
@@ -74,6 +81,30 @@ class FusionTrainingContractTests(unittest.TestCase):
             FUSION_TRAINING_REPORT_SCHEMA,
             "chrompeak-qwen3vl-xic-fusion-training-v1",
         )
+        self.assertEqual(
+            XIC_ONLY_TRAINING_CONFIG_SCHEMA,
+            "chrompeak-qwen3vl-xic-only-training-config-v1",
+        )
+        self.assertEqual(
+            XIC_ONLY_TRAINING_REPORT_SCHEMA,
+            "chrompeak-qwen3vl-xic-only-training-v1",
+        )
+
+    def test_xic_only_messages_are_text_only_and_language_matched(self) -> None:
+        prompt, full = _xic_only_messages(
+            {
+                "language": "zh-CN",
+                "conversations": [
+                    {"from": "human", "value": "<image>只返回 JSON。"},
+                    {"from": "gpt", "value": '{"peak_present":true}'},
+                ],
+            }
+        )
+
+        self.assertEqual(prompt[0]["content"][0]["type"], "text")
+        self.assertNotIn("<image>", prompt[0]["content"][0]["text"])
+        self.assertIn("不提供任何图像像素", prompt[0]["content"][0]["text"])
+        self.assertEqual(full[-1]["role"], "assistant")
 
     def test_slurm_launcher_is_uncapped_resumable_and_train_only(self) -> None:
         script = (
@@ -101,6 +132,9 @@ class FusionTrainingContractTests(unittest.TestCase):
         self.assertIn("QWEN3VL_XIC_FUSION_TRAINING=OK", script)
         self.assertIn('sensor_tokens="${BIOCODER_SENSOR_TOKENS:-4}"', script)
         self.assertIn('--sensor-tokens "$sensor_tokens"', script)
+        self.assertIn('input_modality="${BIOCODER_INPUT_MODALITY:-image_xic}"', script)
+        self.assertIn('--input-modality "$input_modality"', script)
+        self.assertIn("QWEN3VL_XIC_ONLY_TRAINING=OK", script)
         self.assertIn('tokens${sensor_tokens}', script)
 
     def test_development_matrix_has_three_primary_seeds_and_token_ablations(self) -> None:

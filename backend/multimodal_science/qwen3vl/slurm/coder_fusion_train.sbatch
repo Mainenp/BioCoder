@@ -75,6 +75,7 @@ save_steps="${BIOCODER_SAVE_STEPS:-250}"
 log_steps="${BIOCODER_LOG_STEPS:-10}"
 seed="${BIOCODER_SEED:-17}"
 sensor_tokens="${BIOCODER_SENSOR_TOKENS:-4}"
+input_modality="${BIOCODER_INPUT_MODALITY:-image_xic}"
 max_steps="${BIOCODER_MAX_STEPS:-}"
 max_gpu_used_mib="${BIOCODER_MAX_GPU_USED_MIB:-512}"
 max_gpu_utilization="${BIOCODER_MAX_GPU_UTILIZATION:-10}"
@@ -112,6 +113,10 @@ done
 }
 [[ "$sensor_tokens" == "1" || "$sensor_tokens" == "4" || "$sensor_tokens" == "8" ]] || {
   echo "BIOCODER_SENSOR_TOKENS must be 1, 4, or 8" >&2
+  exit 2
+}
+[[ "$input_modality" == "image_xic" || "$input_modality" == "xic_only" ]] || {
+  echo "BIOCODER_INPUT_MODALITY must be image_xic or xic_only" >&2
   exit 2
 }
 [[ "$gpu_index" == "auto" || "$gpu_index" =~ ^[0-9]+$ ]] || {
@@ -168,7 +173,8 @@ run_mode="full"
 if [[ -n "$max_steps" ]]; then
   run_mode="calibration-steps${max_steps}"
 fi
-run_name="image-xic-${run_mode}-tokens${sensor_tokens}-epoch${epochs}-b1-ga${gradient_accumulation_steps}-seed${seed}-${code_short}"
+modality_slug="${input_modality//_/-}"
+run_name="${modality_slug}-${run_mode}-tokens${sensor_tokens}-epoch${epochs}-b1-ga${gradient_accumulation_steps}-seed${seed}-${code_short}"
 output_root="${BIOCODER_FUSION_OUTPUT_ROOT:-$run_root/qwen3vl/fusion/runs}"
 work_output="$output_root/.${run_name}.incomplete"
 final_output="$output_root/$run_name"
@@ -189,7 +195,7 @@ verify_training_output() {
     sha256sum -c artifact_manifest.sha256
   )
   "$python_bin" - "$output" "$run_mode" "$code_revision" \
-    "${pretrained_projector_source:+true}" "$sensor_tokens" <<'PY'
+    "${pretrained_projector_source:+true}" "$sensor_tokens" "$input_modality" <<'PY'
 import json
 import sys
 from pathlib import Path
@@ -205,13 +211,16 @@ mode = sys.argv[2]
 revision = sys.argv[3]
 uses_auxiliary_pretraining = sys.argv[4] == "true"
 sensor_tokens = int(sys.argv[5])
+input_modality = sys.argv[6]
 report = json.loads(
     (root / "fusion_training_report.json").read_text(encoding="utf-8")
 )
-require(
-    report["schema_version"] == "chrompeak-qwen3vl-xic-fusion-training-v1",
-    "Unexpected fusion training schema",
+expected_schema = (
+    "chrompeak-qwen3vl-xic-fusion-training-v1"
+    if input_modality == "image_xic"
+    else "chrompeak-qwen3vl-xic-only-training-v1"
 )
+require(report["schema_version"] == expected_schema, "Unexpected training schema")
 require(report["code_revision"] == revision, "Code revision mismatch")
 require(
     report["model"]["sensor_projector"]["sensor_tokens"] == sensor_tokens,
@@ -226,8 +235,6 @@ for name in (
     "vision_tower_frozen",
     "vision_merger_frozen",
     "assistant_tokens_only_supervision",
-    "image_and_xic_forward",
-    "native_multimodal_rope_positions",
     "lora_and_projector_backward",
     "parameter_updates_verified",
     "train_split_only",
@@ -236,6 +243,16 @@ for name in (
     "initial_adapter_training_rows_bound",
 ):
     require(contracts[name] is True, f"Contract failed: {name}")
+require(contracts["input_modality"] == input_modality, "Input-modality mismatch")
+require(contracts["native_qwen_rope_positions"] is True, "Native RoPE disabled")
+if input_modality == "image_xic":
+    require(contracts["image_and_xic_forward"] is True, "Image/XIC forward disabled")
+    require(contracts["native_multimodal_rope_positions"] is True, "M-RoPE disabled")
+else:
+    require(contracts["image_and_xic_forward"] is False, "Image path was enabled")
+    require(contracts["xic_only_forward"] is True, "XIC-only forward disabled")
+    require(contracts["image_pixels_forwarded"] is False, "Image pixels were forwarded")
+    require(report["training"]["vision_forward_calls"] == 0, "Visual tower was called")
 require(contracts["validation_prompts_opened"] is False, "Validation prompt leak")
 require(contracts["validation_answers_opened"] is False, "Validation answer leak")
 require(contracts["internal_test_accessed"] is False, "Internal-test leak")
@@ -277,12 +294,17 @@ echo "EFFECTIVE_BATCH_SIZE=$((batch_size * gradient_accumulation_steps))"
 echo "MAX_STEPS=${max_steps:-none}"
 echo "SAVE_STEPS=$save_steps"
 echo "SENSOR_TOKENS=$sensor_tokens"
+echo "INPUT_MODALITY=$input_modality"
 
 if [[ -d "$final_output" ]]; then
   echo "=== VERIFY ALREADY-COMPLETED RUN ==="
   verify_training_output "$final_output"
   echo "PERSISTENT_OUTPUT=$final_output"
-  echo "QWEN3VL_XIC_FUSION_TRAINING=ALREADY_COMPLETE"
+  if [[ "$input_modality" == "xic_only" ]]; then
+    echo "QWEN3VL_XIC_ONLY_TRAINING=ALREADY_COMPLETE"
+  else
+    echo "QWEN3VL_XIC_FUSION_TRAINING=ALREADY_COMPLETE"
+  fi
   exit 0
 fi
 
@@ -655,6 +677,7 @@ else
         --log-steps "$log_steps" \
         --seed "$seed" \
         --sensor-tokens "$sensor_tokens" \
+        --input-modality "$input_modality" \
         "${limit_arguments[@]}" \
         "${resume_arguments[@]}"
   )
@@ -682,4 +705,8 @@ PY
 echo "FUSION_TRAINING_REPORT_SHA256=$report_sha256"
 echo "ARTIFACT_MANIFEST_SHA256=$manifest_sha256"
 echo "PERSISTENT_OUTPUT=$final_output"
-echo "QWEN3VL_XIC_FUSION_TRAINING=OK"
+if [[ "$input_modality" == "xic_only" ]]; then
+  echo "QWEN3VL_XIC_ONLY_TRAINING=OK"
+else
+  echo "QWEN3VL_XIC_FUSION_TRAINING=OK"
+fi

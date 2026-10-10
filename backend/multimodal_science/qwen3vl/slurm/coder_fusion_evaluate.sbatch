@@ -72,6 +72,7 @@ max_new_tokens="${BIOCODER_MAX_NEW_TOKENS:-64}"
 bootstrap_iterations="${BIOCODER_BOOTSTRAP_ITERATIONS:-1000}"
 xic_intervention="${BIOCODER_XIC_INTERVENTION:-aligned}"
 xic_intervention_seed="${BIOCODER_XIC_INTERVENTION_SEED:-17}"
+input_modality="${BIOCODER_INPUT_MODALITY:-image_xic}"
 max_gpu_used_mib="${BIOCODER_MAX_GPU_USED_MIB:-512}"
 max_gpu_utilization="${BIOCODER_MAX_GPU_UTILIZATION:-10}"
 min_local_free_gib="${BIOCODER_MIN_LOCAL_FREE_GIB:-32}"
@@ -95,6 +96,10 @@ case "$xic_intervention" in
   aligned|shuffled|zero|availability-off) ;;
   *) echo "Unsupported BIOCODER_XIC_INTERVENTION: $xic_intervention" >&2; exit 2 ;;
 esac
+[[ "$input_modality" == "image_xic" || "$input_modality" == "xic_only" ]] || {
+  echo "Unsupported BIOCODER_INPUT_MODALITY: $input_modality" >&2
+  exit 2
+}
 [[ "$seed" == "17" && "$max_new_tokens" == "64" && "$bootstrap_iterations" == "1000" ]] || {
   echo "Formal fusion evaluation is frozen at seed=17, max_new_tokens=64, bootstrap_iterations=1000" >&2
   exit 2
@@ -132,7 +137,8 @@ actual_revision="$(git -C "$repo_root" rev-parse HEAD)"
   exit 3
 }
 
-run_name="image-xic-${xic_intervention}-iseed${xic_intervention_seed}-validation-${adapter_short}-${code_short}"
+modality_slug="${input_modality//_/-}"
+run_name="${modality_slug}-${xic_intervention}-iseed${xic_intervention_seed}-validation-${adapter_short}-${code_short}"
 generation_root="$run_root/qwen3vl/fusion/generations"
 evaluation_root="$run_root/qwen3vl/fusion/evaluations"
 generation_final="$generation_root/$run_name"
@@ -159,6 +165,7 @@ echo "MAX_NEW_TOKENS=$max_new_tokens"
 echo "BOOTSTRAP_ITERATIONS=$bootstrap_iterations"
 echo "XIC_INTERVENTION=$xic_intervention"
 echo "XIC_INTERVENTION_SEED=$xic_intervention_seed"
+echo "INPUT_MODALITY=$input_modality"
 echo "GENERATION_ANSWER_KEY_AVAILABLE=false"
 echo "INTERNAL_TEST_ACCESSED=false"
 
@@ -472,6 +479,7 @@ if [[ ! -d "$generation_final" ]]; then
         --attention-implementation sdpa \
         --xic-intervention "$xic_intervention" \
         --xic-intervention-seed "$xic_intervention_seed" \
+        --input-modality "$input_modality" \
         "${resume_arguments[@]}"
   )
 fi
@@ -507,7 +515,7 @@ evaluation_report_sha256="$(sha256sum "$evaluation_final/qwen_evaluation_report.
   "$model_artifact_sha256" "$inference_report_sha256" \
   "$instruction_report_sha256" "$fusion_report_sha256" \
   "$dataset_report_sha256" "$seed" "$max_new_tokens" "$bootstrap_iterations" \
-  "$xic_intervention" "$xic_intervention_seed" <<'PY'
+  "$xic_intervention" "$xic_intervention_seed" "$input_modality" <<'PY'
 import hashlib
 import json
 import sys
@@ -524,12 +532,20 @@ evaluation = json.loads(evaluation_path.read_text(encoding="utf-8"))
 seed, max_tokens, bootstrap = map(int, sys.argv[10:13])
 xic_intervention = sys.argv[13]
 xic_intervention_seed = int(sys.argv[14])
+input_modality = sys.argv[15]
 
 assert generation["counts"]["predictions"] == 13708
 assert generation["scope"]["complete_prompt_coverage"] is True
 assert generation["development_comparison_candidate"] is True
 assert generation["runtime"]["backend"] == "transformers"
-assert generation["runtime"]["fusion_execution_backend"] == "transformers-qwen3vl-image-xic"
+expected_backend = (
+    "transformers-qwen3vl-image-xic"
+    if input_modality == "image_xic"
+    else "transformers-qwen3vl-xic-only"
+)
+assert generation["runtime"]["fusion_execution_backend"] == expected_backend
+assert generation["runtime"]["input_modality"] == input_modality
+assert generation["runtime"]["image_pixels_forwarded"] is (input_modality == "image_xic")
 assert generation["runtime"]["adapter_loaded"] is True
 assert generation["runtime"]["manual_cached_greedy_decode"] is True
 assert generation["runtime"]["explicit_fused_mrope_positions"] is True
@@ -541,7 +557,9 @@ assert intervention["seed"] == xic_intervention_seed
 assert intervention["answer_key_used"] is False
 assert intervention["language_variants_share_one_asset_intervention"] is True
 adapter = generation["model"]["adapter"]
-assert adapter["kind"] == "image_xic_fusion"
+expected_kind = "image_xic_fusion" if input_modality == "image_xic" else "xic_only_qwen"
+assert adapter["kind"] == expected_kind
+assert adapter["input_modality"] == input_modality
 assert adapter["training_report_sha256"] == adapter_report
 assert adapter["manifest_sha256"] == adapter_manifest
 assert adapter["development_training_complete"] is True
@@ -573,4 +591,8 @@ PY
 echo "EVALUATION_REPORT_SHA256=$evaluation_report_sha256"
 echo "PERSISTENT_GENERATION=$generation_final"
 echo "PERSISTENT_EVALUATION=$evaluation_final"
-echo "QWEN3VL_XIC_FUSION_EVALUATION=OK"
+if [[ "$input_modality" == "xic_only" ]]; then
+  echo "QWEN3VL_XIC_ONLY_EVALUATION=OK"
+else
+  echo "QWEN3VL_XIC_FUSION_EVALUATION=OK"
+fi

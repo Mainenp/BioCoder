@@ -308,6 +308,28 @@ The versioned scientific report must contain:
   registry, the access completion record, and exact SHA-256 manifests. Model-benchmark eligibility
   does not imply BioCoder agent promotion.
 
+### T23B — Post-seal v1.1 development controls
+
+- Never reopen the sealed internal test. Both controls are validation-only and must record
+  `final_benchmark_eligible=false` and `internal_test_accessed=false`.
+- XIC-only Qwen must omit the image message, `pixel_values`, and `image_grid_thw` in training and
+  inference. A visual-tower hook must fail the run if any current-sample image forward occurs.
+- XIC-only and image + XIC use the same completed image-LoRA language initialization, train rows,
+  aligned XIC bundle, seed, sensor-token count, optimizer settings, decoding, and evaluator. The
+  claim is therefore about current-sample input contribution, not image-free historical training.
+- The SequencePeakNet prompt bundle accepts only a completed sequence-only development run and
+  exposes exactly `presence_probability`, `start_normalized`, and `end_normalized` plus sample
+  identity. Target, label, correctness, loss, and threshold-selection fields are forbidden.
+- Sequence-prompt inference keeps the ROI image and image-only LoRA fixed, appends a language-matched
+  prediction-as-evidence note, requires exact coverage of all 1,815 validation assets, and keeps
+  the instruction answer root outside the model process.
+- Both model processes use greedy decoding and complete all 13,708 bilingual prompts before the
+  existing answer-separated evaluator may open validation answers.
+- The public development exporter must verify every input manifest and publish: three-seed
+  mean/sample-SD with all seed values; one/four/eight-token seed-17 rows; aligned, shuffled, zero,
+  and availability-off rows; uncapped LoRA/fusion wall time; gate values; and, when supplied, the
+  auxiliary-projector comparison. It must emit no absolute paths.
+
 ### T24 — Agent report
 
 The versioned agent report must contain:
@@ -348,6 +370,8 @@ Sample metrics from the README, model card, and experiment report and verify tha
 | Zero-shot image + metadata | Yes | No | Yes | No | None |
 | Qwen3-VL LoRA | Yes | No | Optional | No | LoRA |
 | Sequence baseline | No | Yes | Optional | No | 1D encoder |
+| Qwen XIC-only control | No | Yes | No | No | LoRA + projector; shared image-LoRA initialization |
+| Image LoRA + sequence-prediction prompt | Yes | Frozen prediction text | No | No | Frozen LoRA and frozen 1D encoder |
 | Image + sequence | Yes | Yes | No | No | LoRA + projector |
 | Image + sequence + metadata | Yes | Yes | Yes | No | LoRA + projector |
 | Full system | Yes | Yes | Yes | Yes | LoRA + projector |

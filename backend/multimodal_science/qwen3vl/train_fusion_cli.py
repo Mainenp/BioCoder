@@ -52,6 +52,12 @@ def parser() -> argparse.ArgumentParser:
     command.add_argument("--seed", type=int, default=17)
     command.add_argument("--sensor-tokens", type=int, choices=(1, 4, 8), default=4)
     command.add_argument(
+        "--input-modality",
+        choices=("image_xic", "xic_only"),
+        default="image_xic",
+        help="Controlled input path; xic_only never forwards image pixels to Qwen.",
+    )
+    command.add_argument(
         "--attention-implementation",
         choices=("sdpa", "eager"),
         default="sdpa",
@@ -84,6 +90,7 @@ def main() -> None:
         gradient_checkpointing=not arguments.no_gradient_checkpointing,
         deterministic_warn_only=not arguments.strict_deterministic,
         sensor_tokens=arguments.sensor_tokens,
+        input_modality=arguments.input_modality,
     )
     result = run_fusion_training(
         fusion_bundle_root=arguments.fusion_bundle_root,
