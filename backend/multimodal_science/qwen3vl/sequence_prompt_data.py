@@ -121,11 +121,8 @@ def build_sequence_prompt_bundle(
     _require(root.is_dir(), f"Sequence run not found: {root}")
     manifest = _verify_manifest(root, sequence_manifest_sha256)
     report_path = root / "scientific_report.json"
+    _require(report_path.is_file(), "Missing sequence report")
     _require(sha256_file(report_path) == sequence_report_sha256, "Sequence report hash mismatch")
-    _require(
-        manifest.get("scientific_report.json") == sequence_report_sha256,
-        "Sequence report is not manifest-bound",
-    )
     report = _read_json(report_path, "sequence report")
     _require(report.get("schema_version") == REPORT_SCHEMA, "Unsupported sequence report")
     _require(report.get("development_comparison_eligible") is True, "Sequence run ineligible")
@@ -234,6 +231,8 @@ def build_sequence_prompt_bundle(
                 },
                 "contracts": {
                     "frozen_sequence_predictions_only": True,
+                    "sequence_report_sha256_pinned": True,
+                    "source_predictions_manifest_bound": True,
                     "target_fields_excluded": True,
                     "instruction_answers_opened": False,
                     "development_only": True,

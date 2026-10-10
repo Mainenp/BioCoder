@@ -21,7 +21,9 @@ def _write_json(path: Path, payload: dict[str, object]) -> None:
     path.write_text(json.dumps(payload, sort_keys=True) + "\n", encoding="utf-8")
 
 
-def _source_sequence_run(root: Path) -> tuple[str, str]:
+def _source_sequence_run(
+    root: Path, *, include_report_in_manifest: bool = True
+) -> tuple[str, str]:
     rows = [
         {
             "schema_version": "chrompeak-sequence-prediction-v1",
@@ -62,10 +64,13 @@ def _source_sequence_run(root: Path) -> tuple[str, str]:
         },
     )
     manifest = root / "artifact_manifest.sha256"
+    manifest_paths = [predictions]
+    if include_report_in_manifest:
+        manifest_paths.insert(0, report)
     manifest.write_text(
         "".join(
             f"{sha256_file(path)}  {path.name}\n"
-            for path in (report, predictions)
+            for path in manifest_paths
         ),
         encoding="utf-8",
     )
@@ -73,6 +78,27 @@ def _source_sequence_run(root: Path) -> tuple[str, str]:
 
 
 class SequencePromptContractTests(unittest.TestCase):
+    def test_builder_accepts_report_pinned_separately_from_recovery_manifest(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "source"
+            source.mkdir()
+            report_sha, manifest_sha = _source_sequence_run(
+                source, include_report_in_manifest=False
+            )
+
+            result = build_sequence_prompt_bundle(
+                sequence_run_root=source,
+                sequence_report_sha256=report_sha,
+                sequence_manifest_sha256=manifest_sha,
+                output_dir=root / "bundle",
+                code_revision="a" * 40,
+            )
+
+            report = json.loads(result.report_path.read_text(encoding="utf-8"))
+            self.assertTrue(report["contracts"]["sequence_report_sha256_pinned"])
+            self.assertTrue(report["contracts"]["source_predictions_manifest_bound"])
+
     def test_builder_removes_targets_and_binds_exact_source(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -173,6 +199,8 @@ class SequencePromptContractTests(unittest.TestCase):
         self.assertIn("SEQUENCE_PROMPT_BUNDLE_CONTRACT=OK", script)
         self.assertIn('report["code_revision"] == sys.argv[2]', script)
         self.assertIn('report["sources"]["sequence_report_sha256"]', script)
+        self.assertIn('report["contracts"]["sequence_report_sha256_pinned"]', script)
+        self.assertIn('report["contracts"]["source_predictions_manifest_bound"]', script)
         self.assertNotIn("--instruction-root", generation_block)
         self.assertNotIn("--instruction-report-sha256", generation_block)
         self.assertIn('target_fields_exposed"] is False', script)

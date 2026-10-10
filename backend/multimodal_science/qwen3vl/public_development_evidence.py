@@ -121,10 +121,20 @@ def _development_only(report: dict[str, Any], label: str) -> None:
 
 
 def _metric(tasks: dict[str, Any], task: str, metric: str, label: str) -> float:
-    return _number(
-        _object(tasks.get(task), f"{label}/{task}").get(metric),
-        f"{label}/{task}/{metric}",
-    )
+    task_metrics = _object(tasks.get(task), f"{label}/{task}")
+    value = task_metrics.get(metric)
+    if value is None:
+        section_by_task = {
+            "peak_presence": "classification",
+            "peak_presence_metadata": "classification",
+            "peak_grounding": "grounding",
+        }
+        section = section_by_task.get(task)
+        _require(section is not None, f"{label}/{task}/{metric} is missing")
+        value = _object(
+            task_metrics.get(section), f"{label}/{task}/{section}"
+        ).get(metric)
+    return _number(value, f"{label}/{task}/{metric}")
 
 
 def _statistics(

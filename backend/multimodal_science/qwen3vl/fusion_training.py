@@ -173,6 +173,8 @@ def xic_only_prompt_text(prompt: str, language: str) -> str:
 
 def _xic_only_messages(
     record: dict[str, Any],
+    *,
+    language: str | None = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """Build a text/XIC conversation without exposing image pixels to Qwen.
 
@@ -190,8 +192,8 @@ def _xic_only_messages(
     response = assistant.get("value")
     _require(isinstance(prompt, str), "Bad prompt")
     _require(isinstance(response, str) and bool(response), "Bad assistant response")
-    language = record.get("language")
-    prompt_text = xic_only_prompt_text(prompt, str(language))
+    resolved_language = language if language is not None else record.get("language")
+    prompt_text = xic_only_prompt_text(prompt, str(resolved_language))
     user = {"role": "user", "content": [{"type": "text", "text": prompt_text}]}
     answer = {"role": "assistant", "content": [{"type": "text", "text": response}]}
     return [user], [user, answer]
@@ -795,7 +797,7 @@ def run_fusion_training(
                 prompt_messages, full_messages = (
                     _messages(record, image)
                     if settings.input_modality == "image_xic"
-                    else _xic_only_messages(record)
+                    else _xic_only_messages(record, language=str(link.get("language")))
                 )
                 full = processor.apply_chat_template(
                     full_messages,

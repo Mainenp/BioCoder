@@ -129,13 +129,30 @@ def _training(schema: str, seconds: float) -> dict:
 
 
 def _evaluation(offset: float) -> dict:
+    flat = _tasks(offset)
+    nested = {
+        "peak_presence": {"classification": flat["peak_presence"]},
+        "peak_presence_metadata": {
+            "classification": flat["peak_presence_metadata"]
+        },
+        "peak_grounding": {"grounding": flat["peak_grounding"]},
+        "scientific_qc": flat["scientific_qc"],
+    }
+    by_language = {}
+    for language, language_offset in (("en", -0.01), ("zh-CN", 0.01)):
+        language_flat = _tasks(offset + language_offset)
+        by_language[language] = {
+            "peak_presence": {"classification": language_flat["peak_presence"]},
+            "peak_presence_metadata": {
+                "classification": language_flat["peak_presence_metadata"]
+            },
+            "peak_grounding": {"grounding": language_flat["peak_grounding"]},
+            "scientific_qc": language_flat["scientific_qc"],
+        }
     return {
         "schema_version": BILINGUAL_EVALUATION_REPORT_SCHEMA,
-        "metrics": _tasks(offset),
-        "metrics_by_language": {
-            "en": _tasks(offset - 0.01),
-            "zh-CN": _tasks(offset + 0.01),
-        },
+        "metrics": nested,
+        "metrics_by_language": by_language,
         "counts": {"predictions": 13708},
         "development_comparison_eligible": True,
         "final_benchmark_eligible": False,

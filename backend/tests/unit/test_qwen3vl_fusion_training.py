@@ -93,12 +93,12 @@ class FusionTrainingContractTests(unittest.TestCase):
     def test_xic_only_messages_are_text_only_and_language_matched(self) -> None:
         prompt, full = _xic_only_messages(
             {
-                "language": "zh-CN",
                 "conversations": [
                     {"from": "human", "value": "<image>只返回 JSON。"},
                     {"from": "gpt", "value": '{"peak_present":true}'},
                 ],
-            }
+            },
+            language="zh-CN",
         )
 
         self.assertEqual(prompt[0]["content"][0]["type"], "text")

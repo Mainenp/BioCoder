@@ -140,6 +140,8 @@ assert report["schema_version"] == "chrompeak-sequence-prompt-bundle-v1"
 assert report["code_revision"] == sys.argv[2]
 assert report["sources"]["sequence_report_sha256"] == sys.argv[3]
 assert report["sources"]["sequence_manifest_sha256"] == sys.argv[4]
+assert report["contracts"]["sequence_report_sha256_pinned"] is True
+assert report["contracts"]["source_predictions_manifest_bound"] is True
 assert report["contracts"]["target_fields_excluded"] is True
 assert report["contracts"]["instruction_answers_opened"] is False
 assert report["internal_test_accessed"] is False
