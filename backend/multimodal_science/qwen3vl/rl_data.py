@@ -117,6 +117,64 @@ class RLPoolResult:
     selection_source_groups: int
 
 
+@dataclass(frozen=True)
+class VerifiedRLTrainingPool:
+    root: Path
+    report: dict[str, Any]
+    report_sha256: str
+    records: tuple[dict[str, Any], ...]
+    selection_group_ids: frozenset[str]
+
+
+def load_rl_training_pool(
+    root: Path, expected_report_sha256: str
+) -> VerifiedRLTrainingPool:
+    """Load only the training artifact; selection samples stay unopened."""
+
+    root = root.resolve()
+    assert_no_protected_input_paths([root])
+    report_path = root / "rl_pool_report.json"
+    _require(report_path.is_file(), f"Missing RL pool report: {report_path}")
+    actual_report_sha256 = sha256_file(report_path)
+    _require(
+        actual_report_sha256 == expected_report_sha256,
+        "RL pool report hash mismatch",
+    )
+    report = _read_json(report_path, "RL pool report")
+    _require(report.get("schema_version") == RL_POOL_SCHEMA, "Wrong RL pool schema")
+    contracts = _object(report.get("contracts"), "RL pool contracts")
+    for name, expected in (
+        ("train_artifacts_only", True),
+        ("validation_answers_opened", False),
+        ("internal_test_accessed", False),
+        ("selection_groups_trained", False),
+        ("vision_inputs_present", False),
+    ):
+        _require(contracts.get(name) is expected, f"RL pool contract failed: {name}")
+    selection = _object(report.get("selection"), "RL selection lock")
+    group_ids = selection.get("group_ids")
+    _require(
+        isinstance(group_ids, list)
+        and len(group_ids) == SELECTION_SOURCE_GROUPS
+        and all(isinstance(group_id, str) and bool(group_id) for group_id in group_ids),
+        "RL selection group lock is invalid",
+    )
+    _require(len(set(group_ids)) == len(group_ids), "Duplicate selection group lock")
+    training_path, artifact = _artifact(
+        root, report, "training_pool", "RL training pool"
+    )
+    records = _read_jsonl(training_path, "RL training pool")
+    _require(artifact.get("records") == len(records), "RL training pool count mismatch")
+    assert_training_pool_isolation(records, group_ids)
+    return VerifiedRLTrainingPool(
+        root=root,
+        report=report,
+        report_sha256=actual_report_sha256,
+        records=tuple(records),
+        selection_group_ids=frozenset(group_ids),
+    )
+
+
 def selection_group_key(source_path: str) -> str:
     payload = f"{SELECTION_HASH_NAMESPACE}\0{source_path}".encode("utf-8")
     return hashlib.sha256(payload).hexdigest()
@@ -496,6 +554,9 @@ def build_rl_pool(
             "code_revision": code_revision,
             "created_at": datetime.now(timezone.utc).isoformat(),
             "sources": {
+                "dataset_report_sha256": _object(
+                    fusion.get("sources"), "fusion sources"
+                ).get("dataset_report_sha256"),
                 "lora_bundle_report_sha256": lora_bundle_report_sha256,
                 "lora_train_qwen_sha256": train_rows_artifact["sha256"],
                 "lora_selection_manifest_sha256": selections_artifact["sha256"],
@@ -589,4 +650,3 @@ def build_rl_pool(
         training_source_groups=len(training_group_ids),
         selection_source_groups=len(selection_group_ids),
     )
-
