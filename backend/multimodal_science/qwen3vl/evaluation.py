@@ -32,6 +32,13 @@ from multimodal_science.qwen3vl.instruction_data import (
     VALIDATION_ANSWER_SCHEMA,
     VALIDATION_PROMPT_SCHEMA,
 )
+from multimodal_science.qwen3vl.task_scoring import (
+    bbox_iou as _bbox_iou,
+    grounding_dimensions as _grounding_dimensions,
+    score_task_response,
+    strict_json_object as _strict_json_object,
+    valid_bbox as _valid_bbox,
+)
 
 PREDICTION_SCHEMA = "chrompeak-qwen3vl-prediction-v1"
 EVALUATION_RECORD_SCHEMA = "chrompeak-qwen3vl-evaluation-record-v1"
@@ -40,7 +47,6 @@ BILINGUAL_EVALUATION_RECORD_SCHEMA = "chrompeak-qwen3vl-evaluation-record-v2"
 BILINGUAL_EVALUATION_REPORT_SCHEMA = "chrompeak-qwen3vl-evaluation-v2"
 _HEX_24 = re.compile(r"^[0-9a-f]{24}$")
 _HEX_64 = re.compile(r"^[0-9a-f]{64}$")
-_GROUNDING_SIZE = re.compile(r"for a ([1-9][0-9]*)x([1-9][0-9]*) image")
 _SUPPORTED_DATASET_SCHEMAS = {DATASET_SCHEMA, BILINGUAL_DATASET_SCHEMA}
 
 
@@ -136,66 +142,6 @@ def _unique_by_id(
         _require(instruction_id not in result, f"Duplicate instruction_id in {context}")
         result[instruction_id] = record
     return result
-
-
-def _strict_json_object(response: str) -> tuple[dict[str, Any] | None, bool]:
-    try:
-        parsed = json.loads(response.strip())
-    except (json.JSONDecodeError, TypeError):
-        return None, False
-    return (parsed, True) if isinstance(parsed, dict) else (None, True)
-
-
-def _is_number(value: Any) -> bool:
-    return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
-
-
-def _grounding_dimensions(
-    prompt: dict[str, Any], manifest: dict[str, Any]
-) -> tuple[int, int]:
-    width = manifest.get("image_width")
-    height = manifest.get("image_height")
-    if (
-        isinstance(width, int)
-        and not isinstance(width, bool)
-        and width > 0
-        and isinstance(height, int)
-        and not isinstance(height, bool)
-        and height > 0
-    ):
-        return width, height
-    conversations = prompt.get("conversations")
-    _require(
-        isinstance(conversations, list) and len(conversations) == 1,
-        "Validation prompt must contain exactly one human message",
-    )
-    message = _object(conversations[0], "validation conversation")
-    value = message.get("value")
-    _require(message.get("from") == "human" and isinstance(value, str), "Invalid prompt")
-    match = _GROUNDING_SIZE.search(value)
-    _require(match is not None, "Grounding prompt does not declare image dimensions")
-    return int(match.group(1)), int(match.group(2))
-
-
-def _valid_bbox(value: Any, width: int, height: int) -> list[float] | None:
-    if not isinstance(value, list) or len(value) != 4 or not all(_is_number(x) for x in value):
-        return None
-    x1, y1, x2, y2 = (float(x) for x in value)
-    if not (0.0 <= x1 < x2 <= width and 0.0 <= y1 < y2 <= height):
-        return None
-    return [x1, y1, x2, y2]
-
-
-def _bbox_iou(first: list[float], second: list[float]) -> float:
-    x1 = max(first[0], second[0])
-    y1 = max(first[1], second[1])
-    x2 = min(first[2], second[2])
-    y2 = min(first[3], second[3])
-    intersection = max(0.0, x2 - x1) * max(0.0, y2 - y1)
-    first_area = (first[2] - first[0]) * (first[3] - first[1])
-    second_area = (second[2] - second[0]) * (second[3] - second[1])
-    union = first_area + second_area - intersection
-    return intersection / union if union > 0.0 else 0.0
 
 
 def _grouped_mean_bootstrap(
@@ -654,9 +600,6 @@ def evaluate_qwen_predictions(
         manifest = manifest_by_id[instruction_id]
         prediction = prediction_by_id[instruction_id]
         task = str(manifest["task"])
-        expected, expected_json = _strict_json_object(answer["expected_response"])
-        _require(expected_json and expected is not None, "Builder answer is not a JSON object")
-        parsed, valid_json = _strict_json_object(prediction["response"])
         row: dict[str, Any] = {
             "schema_version": (
                 BILINGUAL_EVALUATION_RECORD_SCHEMA
@@ -667,97 +610,21 @@ def evaluate_qwen_predictions(
             "task": task,
             "asset_id": manifest.get("asset_id"),
             "group_id": manifest.get("group_id"),
-            "valid_json": valid_json,
-            "schema_valid": False,
-            "exact_match": False,
         }
         if bilingual:
             row["language"] = manifest["language"]
             row["pair_id"] = manifest["pair_id"]
 
-        if task in {"peak_presence", "peak_presence_metadata"}:
-            _require(
-                set(expected) == {"peak_present"}
-                and isinstance(expected["peak_present"], bool),
-                "Invalid presence answer",
+        row.update(
+            score_task_response(
+                task=task,
+                prompt=prompt,
+                manifest=manifest,
+                expected_response=answer["expected_response"],
+                predicted_response=prediction["response"],
+                bilingual=bilingual,
             )
-            schema_valid = (
-                parsed is not None
-                and set(parsed) == {"peak_present"}
-                and isinstance(parsed["peak_present"], bool)
-            )
-            truth = bool(expected["peak_present"])
-            predicted = bool(parsed["peak_present"]) if schema_valid else None
-            row.update(
-                {
-                    "schema_valid": schema_valid,
-                    "exact_match": schema_valid and predicted == truth,
-                    "target_peak_present": truth,
-                    "predicted_peak_present": predicted,
-                    "classification_score": float(predicted) if schema_valid else float(not truth),
-                }
-            )
-        elif task == "peak_grounding":
-            width, height = _grounding_dimensions(prompt, manifest)
-            expected_box = _valid_bbox(expected.get("bbox_2d"), width, height)
-            _require(
-                set(expected) == {"bbox_2d"} and expected_box is not None,
-                "Invalid grounding answer",
-            )
-            predicted_box = (
-                _valid_bbox(parsed.get("bbox_2d"), width, height)
-                if parsed is not None and set(parsed) == {"bbox_2d"}
-                else None
-            )
-            schema_valid = predicted_box is not None
-            iou = _bbox_iou(expected_box, predicted_box) if predicted_box is not None else 0.0
-            row.update(
-                {
-                    "schema_valid": schema_valid,
-                    "exact_match": schema_valid and predicted_box == expected_box,
-                    "image_width": width,
-                    "image_height": height,
-                    "expected_bbox_2d": expected_box,
-                    "predicted_bbox_2d": predicted_box,
-                    "bbox_iou": iou,
-                    "iou_at_0_5": iou >= 0.5,
-                    "x_boundary_absolute_error_pixels": (
-                        [
-                            abs(predicted_box[0] - expected_box[0]),
-                            abs(predicted_box[2] - expected_box[2]),
-                        ]
-                        if predicted_box is not None
-                        else None
-                    ),
-                    "full_height": (
-                        predicted_box is not None
-                        and predicted_box[1] == 0.0
-                        and predicted_box[3] == float(height)
-                    ),
-                }
-            )
-        else:
-            _require(
-                set(expected) == {"qc_state", "reason"}
-                and all(isinstance(expected[key], str) for key in expected),
-                "Invalid scientific QC answer",
-            )
-            schema_valid = (
-                parsed is not None
-                and set(parsed) == {"qc_state", "reason"}
-                and all(isinstance(parsed[key], str) and bool(parsed[key]) for key in parsed)
-            )
-            row.update(
-                {
-                    "schema_valid": schema_valid,
-                    "exact_match": schema_valid and parsed == expected,
-                    "qc_state_correct": schema_valid and parsed["qc_state"] == expected["qc_state"],
-                    "reason_correct": schema_valid and parsed["reason"] == expected["reason"],
-                }
-            )
-            if bilingual:
-                row["predicted_qc_state"] = parsed["qc_state"] if schema_valid else None
-                row["predicted_reason"] = parsed["reason"] if schema_valid else None
+        )
         evidence.append(row)
         task_rows[task].append(row)
 
