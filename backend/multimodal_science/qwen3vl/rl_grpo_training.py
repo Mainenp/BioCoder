@@ -1121,6 +1121,7 @@ class _GRPORuntime:
                 staging / "checkpoint.json",
                 {"schema_version": GRPO_CHECKPOINT_SCHEMA, **state},
             )
+            _write_manifest(staging)
             Path(staging_name).replace(final)
         return final
 
