@@ -1210,3 +1210,27 @@ new sealed test set.
 Post-seal V1.1 validation evidence is independently complete and inspectable through the three
 development commands above. It remains ineligible for the final benchmark and never changes the
 completed V1 release capsule.
+
+## V2 localization-first GRPO
+
+The preregistered v2 experiment is defined in
+[`MULTIMODAL_V2_RL_PLAN.md`](../../MULTIMODAL_V2_RL_PLAN.md), with execution evidence recorded only
+in [`MULTIMODAL_V2_RL_RESULTS.md`](../../MULTIMODAL_V2_RL_RESULTS.md). It reuses no v1
+internal-test data and introduces no new labels. Training and difficulty screening receive a
+hash-reconstructed train-only view that excludes the frozen eight-source-group selection set.
+
+The Slurm sequence is:
+
+1. `qwen3vl/slurm/coder_rl_prepare.sbatch` builds the disjoint pool and selection artifacts.
+2. `qwen3vl/slurm/coder_rl_difficulty.sbatch` runs train-only G=8 difficulty screening.
+3. `qwen3vl/slurm/coder_rl_train.sbatch` runs either GRPO or matched C1 continue-SFT, selected by
+   `BIOCODER_RL_TRAINER=grpo|c1`; use `smoke` and `calibration` before any formal mode.
+4. `qwen3vl/slurm/coder_rl_selection.sbatch` builds/scores/seals the selection decision and owns
+   the one-time validation access ledger.
+5. `qwen3vl/slurm/coder_rl_localization.sbatch` accepts validation evaluations only after that
+   exact ledger is complete.
+
+Formal jobs must not be submitted until the two-step CUDA smoke proves adapter switching,
+nonzero answer gradients, parameter updates, save/reload, and zero visual-tower calls, and the
+calibration report records step time, peak memory, the difficulty summary, and the applicable
+predeclared compute-reduction rule.
