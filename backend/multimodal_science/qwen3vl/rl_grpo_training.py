@@ -147,6 +147,23 @@ def _safe_artifact(
     return path, artifact
 
 
+def starting_processor_pixel_bounds(report: dict[str, Any]) -> tuple[int, int]:
+    """Return the immutable processor bounds inherited from the starting run."""
+    training = _object(report.get("training"), "starting training")
+    minimum = training.get("min_pixels")
+    maximum = training.get("max_pixels")
+    _require(
+        isinstance(minimum, int)
+        and not isinstance(minimum, bool)
+        and isinstance(maximum, int)
+        and not isinstance(maximum, bool)
+        and minimum > 0
+        and maximum >= minimum,
+        "Starting processor pixel bounds are invalid",
+    )
+    return minimum, maximum
+
+
 @dataclass(frozen=True)
 class GRPOSettings:
     experiment: str = "R1"
@@ -1661,6 +1678,7 @@ def run_grpo_training(
         and not bool(state["stopped_early"])
     )
     start_sources = _object(runtime.verified_start.report.get("sources"), "start sources")
+    min_pixels, max_pixels = starting_processor_pixel_bounds(runtime.verified_start.report)
     report = {
         "schema_version": GRPO_REPORT_SCHEMA,
         "code_revision": code_revision,
@@ -1700,6 +1718,8 @@ def run_grpo_training(
             "weight_decay": WEIGHT_DECAY,
             "max_grad_norm": MAX_GRAD_NORM,
             "attention_implementation": settings.attention_implementation,
+            "min_pixels": min_pixels,
+            "max_pixels": max_pixels,
             "vision_forward_calls": runtime.visual_forward_calls,
             "wall_time_seconds": time.monotonic() - wall_started,
             "peak_cuda_bytes": runtime.peak_cuda_bytes,

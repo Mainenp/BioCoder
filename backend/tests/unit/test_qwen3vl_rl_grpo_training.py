@@ -13,6 +13,7 @@ from multimodal_science.qwen3vl.rl_grpo_training import (
     normalize_group_advantages,
     numpy_causal_answer_log_probs,
     prompt_batch,
+    starting_processor_pixel_bounds,
     validate_settings,
 )
 from multimodal_science.qwen3vl.train_rl_cli import parser
@@ -149,6 +150,14 @@ class GRPOTrainingTests(unittest.TestCase):
             GRPOSettings(experiment="R3", run_mode="formal").projector_learning_rate,
             1e-5,
         )
+
+    def test_processor_pixel_bounds_are_inherited_and_validated(self) -> None:
+        report = {"training": {"min_pixels": 3136, "max_pixels": 1003520}}
+        self.assertEqual(starting_processor_pixel_bounds(report), (3136, 1003520))
+        with self.assertRaisesRegex(ValueError, "pixel bounds"):
+            starting_processor_pixel_bounds(
+                {"training": {"min_pixels": 100, "max_pixels": 99}}
+            )
 
     def test_training_cli_has_no_validation_or_internal_test_surface(self) -> None:
         destinations = {action.dest for action in parser()._actions}
