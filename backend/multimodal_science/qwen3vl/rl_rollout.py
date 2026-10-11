@@ -11,6 +11,7 @@ from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from typing import Any, Sequence
 
+from multimodal_science.chrompeakformer.multimodal_dataset import DATASET_SCHEMA
 from multimodal_science.data.manifest import sha256_file
 from multimodal_science.qwen3vl.fusion_inference import (
     _FusionAdapterVerifier,
@@ -94,7 +95,19 @@ def verify_train_signals(
     report = _read_json(report_path, "Dataset report")
     _require(report.get("splits") == ["train", "validation"], "Unexpected Dataset split contract")
     _require(report.get("target_points") == 160, "Unexpected XIC point count")
-    _require(report.get("internal_test_accessed") is False, "Dataset report used internal test")
+    internal_test_accessed = report.get("internal_test_accessed")
+    if internal_test_accessed is None:
+        _require(
+            report.get("schema_version") == DATASET_SCHEMA,
+            "Legacy Dataset report has an unsupported schema",
+        )
+        artifacts = _object(report.get("artifacts"), "Dataset artifacts")
+        _require(
+            all("internal_test" not in str(name).lower() for name in artifacts),
+            "Legacy Dataset report references internal test",
+        )
+    else:
+        _require(internal_test_accessed is False, "Dataset report used internal test")
     signals_path, artifact = _safe_artifact(
         dataset_root, report, "train_signals", "train signals"
     )

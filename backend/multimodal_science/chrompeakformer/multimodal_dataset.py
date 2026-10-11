@@ -630,6 +630,7 @@ def build_multimodal_dataset(
                 "sequence_preflight_sha256": preflight_sha256,
                 "target_points": target_points,
                 "splits": sorted(by_split),
+                "internal_test_accessed": "internal_test" in by_split,
                 "frozen_scalar_normalization_sha256": scalar_normalization_sha256,
                 "counts": {
                     "assets": asset_count,

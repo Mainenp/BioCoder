@@ -1,4 +1,7 @@
+import hashlib
+import json
 import math
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -16,6 +19,7 @@ from multimodal_science.qwen3vl.rl_grpo_training import (
     starting_processor_pixel_bounds,
     validate_settings,
 )
+from multimodal_science.qwen3vl.rl_rollout import verify_train_signals
 from multimodal_science.qwen3vl.train_rl_cli import parser
 
 
@@ -49,6 +53,70 @@ def _record(index: int, task: str) -> dict:
 
 
 class GRPOTrainingTests(unittest.TestCase):
+    def _train_signal_view(
+        self, root: Path, *, internal_test_accessed: bool | None
+    ) -> tuple[Path, str]:
+        signals = root / "train_signals.npy"
+        np.save(signals, np.zeros((2, 160), dtype=np.float32), allow_pickle=False)
+        report = {
+            "schema_version": "chrompeak-multimodal-dataset-v1",
+            "splits": ["train", "validation"],
+            "target_points": 160,
+            "artifacts": {
+                "train_signals": {
+                    "path": signals.name,
+                    "sha256": hashlib.sha256(signals.read_bytes()).hexdigest(),
+                    "shape": [2, 160],
+                }
+            },
+        }
+        if internal_test_accessed is not None:
+            report["internal_test_accessed"] = internal_test_accessed
+        report_path = root / "dataset_report.json"
+        report_path.write_text(
+            json.dumps(report, ensure_ascii=False, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        return report_path, hashlib.sha256(report_path.read_bytes()).hexdigest()
+
+    def test_train_signal_view_accepts_legacy_train_validation_report(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            _, report_sha256 = self._train_signal_view(
+                root, internal_test_accessed=None
+            )
+            verified = verify_train_signals(root, report_sha256)
+            self.assertEqual(verified.shape, (2, 160))
+
+    def test_train_signal_view_rejects_explicit_internal_test_access(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            _, report_sha256 = self._train_signal_view(
+                root, internal_test_accessed=True
+            )
+            with self.assertRaisesRegex(ValueError, "used internal test"):
+                verify_train_signals(root, report_sha256)
+
+    def test_legacy_train_signal_view_rejects_internal_test_artifact(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            report_path, _ = self._train_signal_view(
+                root, internal_test_accessed=None
+            )
+            report = json.loads(report_path.read_text(encoding="utf-8"))
+            report["artifacts"]["internal_test_signals"] = {
+                "path": "not-opened.npy",
+                "sha256": "0" * 64,
+                "shape": [1, 160],
+            }
+            report_path.write_text(
+                json.dumps(report, ensure_ascii=False, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
+            report_sha256 = hashlib.sha256(report_path.read_bytes()).hexdigest()
+            with self.assertRaisesRegex(ValueError, "references internal test"):
+                verify_train_signals(root, report_sha256)
+
     def test_group_advantages_skip_zero_std_and_center_nonzero_groups(self) -> None:
         self.assertIsNone(normalize_group_advantages([0.5] * 8))
         advantages = normalize_group_advantages([0.0, 1.0] * 4)

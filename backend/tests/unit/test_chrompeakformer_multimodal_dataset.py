@@ -206,6 +206,7 @@ class ChromPeakFormerMultimodalDatasetTests(unittest.TestCase):
         self.assertEqual(example["sequence"]["length"], 32)
         self.assertEqual(example["target"]["coordinate_system"], "roi_fraction_0_1")
         self.assertEqual(report["counts"]["assets"], 2)
+        self.assertFalse(report["internal_test_accessed"])
         self.assertEqual(report["counts"]["by_split"]["validation"]["signal_unavailable"], 1)
         self.assertEqual(len(events), 2)
         self.assertFalse(result.cached)
@@ -318,6 +319,7 @@ class ChromPeakFormerMultimodalDatasetTests(unittest.TestCase):
 
         self.assertEqual(scalars.shape, (1, 7))
         self.assertEqual(report["splits"], ["internal_test"])
+        self.assertTrue(report["internal_test_accessed"])
         self.assertEqual(
             report["frozen_scalar_normalization_sha256"], normalization_sha256
         )
