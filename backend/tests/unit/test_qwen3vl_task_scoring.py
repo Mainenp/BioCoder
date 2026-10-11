@@ -28,6 +28,20 @@ class TaskScoringTests(unittest.TestCase):
         self.assertEqual(grounding_dimensions(prompt, {"image_width": 12, "image_height": 8}), (12, 8))
         self.assertEqual(grounding_dimensions(prompt, {}), (100, 20))
 
+    def test_grounding_dimensions_parse_canonical_chinese_prompt(self) -> None:
+        prompt = {
+            "conversations": [
+                {
+                    "from": "human",
+                    "value": (
+                        "请定位目标峰。坐标必须使用原图像素；"
+                        "图像尺寸为 100×20，边界框覆盖图像完整高度。"
+                    ),
+                }
+            ]
+        }
+        self.assertEqual(grounding_dimensions(prompt, {}), (100, 20))
+
     def test_scores_all_registered_task_schemas(self) -> None:
         prompt = {
             "conversations": [

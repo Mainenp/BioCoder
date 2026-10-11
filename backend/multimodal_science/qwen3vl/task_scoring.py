@@ -13,7 +13,10 @@ import re
 from typing import Any
 
 
-_GROUNDING_SIZE = re.compile(r"for a ([1-9][0-9]*)x([1-9][0-9]*) image")
+_GROUNDING_SIZE_PATTERNS = (
+    re.compile(r"for a ([1-9][0-9]*)x([1-9][0-9]*) image"),
+    re.compile(r"图像尺寸为\s*([1-9][0-9]*)×([1-9][0-9]*)"),
+)
 
 
 def _require(condition: bool, message: str) -> None:
@@ -70,7 +73,11 @@ def grounding_dimensions(
     message = _object(conversations[0], "validation conversation")
     value = message.get("value")
     _require(message.get("from") == "human" and isinstance(value, str), "Invalid prompt")
-    match = _GROUNDING_SIZE.search(value)
+    match = None
+    for pattern in _GROUNDING_SIZE_PATTERNS:
+        match = pattern.search(value)
+        if match is not None:
+            break
     _require(match is not None, "Grounding prompt does not declare image dimensions")
     return int(match.group(1)), int(match.group(2))
 
@@ -224,4 +231,3 @@ _is_number = is_number
 _grounding_dimensions = grounding_dimensions
 _valid_bbox = valid_bbox
 _bbox_iou = bbox_iou
-

@@ -63,6 +63,28 @@ class RLRewardTests(unittest.TestCase):
         self.assertEqual(at_three_quarters.iou_at_0_5_bonus, 0.2)
         self.assertEqual(at_three_quarters.iou_at_0_75_bonus, 0.2)
 
+    def test_grounding_reward_accepts_canonical_chinese_dimensions(self) -> None:
+        result = score_rl_response(
+            task="peak_grounding",
+            prompt={
+                "conversations": [
+                    {
+                        "from": "human",
+                        "value": (
+                            "请定位目标峰区间。图像尺寸为 100×20，"
+                            "边界框覆盖图像完整高度。"
+                        ),
+                    }
+                ]
+            },
+            manifest={},
+            expected_response='{"bbox_2d":[20,0,40,20]}',
+            predicted_response='{"bbox_2d":[20,0,40,20]}',
+            terminated_with_eos=True,
+        )
+        self.assertEqual(result.interval_iou, 1.0)
+        self.assertGreater(result.reward, INVALID_GROUNDING_REWARD)
+
     def test_grounding_invalid_or_non_full_height_is_strictly_worse(self) -> None:
         malformed = self._grounding("not-json")
         no_eos = self._grounding([20, 0, 40, 20], eos=False)
