@@ -96,6 +96,15 @@ def _stable_reinjection_key(seed: int, instruction_id: str) -> str:
     ).hexdigest()
 
 
+def _difficulty_work_dir(output_dir: Path) -> Path:
+    """Name the resumable journal beside either final or dot-prefixed outputs."""
+
+    hidden_name = (
+        output_dir.name if output_dir.name.startswith(".") else f".{output_dir.name}"
+    )
+    return output_dir.parent / f"{hidden_name}.work"
+
+
 def _quantile(sorted_values: Sequence[float], probability: float) -> float:
     _require(bool(sorted_values), "Cannot summarize an empty distribution")
     if len(sorted_values) == 1:
@@ -316,7 +325,7 @@ def run_difficulty_screening(
     _require(not output_dir.exists(), f"Difficulty output already exists: {output_dir}")
     output_dir = output_dir.resolve()
     output_dir.parent.mkdir(parents=True, exist_ok=True)
-    work_dir = output_dir.parent / f".{output_dir.name}.work"
+    work_dir = _difficulty_work_dir(output_dir)
     work_dir.mkdir(parents=True, exist_ok=True)
     journal_path = work_dir / "difficulty_rollouts.jsonl"
     rollouts = _read_resume_journal(journal_path, records)

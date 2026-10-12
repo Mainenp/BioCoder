@@ -1,9 +1,11 @@
 import unittest
+from pathlib import Path
 
 import numpy as np
 
 from multimodal_science.qwen3vl.rl_difficulty import (
     GROUP_SIZE,
+    _difficulty_work_dir,
     select_difficulty_records,
 )
 from multimodal_science.qwen3vl.rl_rollout import (
@@ -34,6 +36,16 @@ def _rollout(record: dict, rewards: list[float], exact: list[bool]) -> dict:
 
 
 class RLDifficultyTests(unittest.TestCase):
+    def test_resume_journal_matches_slurm_cleanup_for_dot_prefixed_output(self) -> None:
+        self.assertEqual(
+            _difficulty_work_dir(Path("/runs/.formal.incomplete")),
+            Path("/runs/.formal.incomplete.work"),
+        )
+        self.assertEqual(
+            _difficulty_work_dir(Path("/runs/formal")),
+            Path("/runs/.formal.work"),
+        )
+
     def test_filters_by_preregistered_task_specific_rules(self) -> None:
         records = [
             _record(0, "peak_grounding", "zh-CN"),
