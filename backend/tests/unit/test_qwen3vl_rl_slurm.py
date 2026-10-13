@@ -37,6 +37,19 @@ class RlSlurmContractTests(unittest.TestCase):
         self.assertIn("--resume", train)
         self.assertIn("VALIDATION_ANSWERS_OPENED=false", train)
 
+    def test_train_script_preserves_verified_runtime_contract_in_clean_environment(self) -> None:
+        train = self._script("coder_rl_train.sbatch")
+        self.assertIn('actual_revision="$(git -C "$repo_root" rev-parse "$revision^{commit}")"', train)
+        self.assertIn('[[ "$actual_revision" == "$revision" ]]', train)
+        self.assertIn('BIOCODER_VERIFIED_CODE_REVISION="$actual_revision"', train)
+        self.assertIn("BIOCODER_TRAIN_INPUT_SCOPE=staged_train_artifacts_only", train)
+        self.assertIn(
+            "BIOCODER_GPU_ALLOCATION_MODE=manual_physical_index_guard_no_slurm_gres",
+            train,
+        )
+        self.assertIn("CUBLAS_WORKSPACE_CONFIG=:4096:8", train)
+        self.assertIn('env -i "${environment[@]}"', train)
+
     def test_selection_gate_and_analysis_require_a_completed_ledger(self) -> None:
         selection = self._script("coder_rl_selection.sbatch")
         localization = self._script("coder_rl_localization.sbatch")

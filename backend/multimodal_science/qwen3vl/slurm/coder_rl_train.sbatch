@@ -70,6 +70,8 @@ cleanup() { [[ "$scratch" == /tmp/biocoder-"$USER"-rl-train-* ]] && rm -rf -- "$
 trap cleanup EXIT
 mkdir -p "$scratch/code" "$scratch/inputs" "$scratch/tmp" "$scratch/cache"
 git -C "$repo_root" archive "$revision" | tar -xf - -C "$scratch/code"
+actual_revision="$(git -C "$repo_root" rev-parse "$revision^{commit}")"
+[[ "$actual_revision" == "$revision" ]]
 
 echo "=== STAGE HASH-BOUND TRAIN-ONLY INPUT VIEW ==="
 PYTHONPATH="$scratch/code/backend" "$python_bin" - \
@@ -133,7 +135,7 @@ echo "SELECTED_PHYSICAL_GPU=$gpu_index"
 
 resume=(); [[ -d "$output" ]] && resume=(--resume)
 common=(--code-revision "$revision" --rl-pool-root "$scratch/inputs/pool" --rl-pool-report-sha256 "$pool_sha" --difficulty-root "$scratch/inputs/difficulty" --difficulty-report-sha256 "$difficulty_sha" --dataset-root "$scratch/inputs/dataset" --dataset-report-sha256 "$dataset_sha" --starting-adapter-root "$scratch/inputs/adapter" --starting-adapter-report-sha256 "$adapter_report_sha" --starting-adapter-manifest-sha256 "$adapter_manifest_sha" --model-name-or-path "$model_cache" --model-revision "$model_revision" --model-artifact-sha256 "$model_artifact_sha" --model-manifest-path "$model_manifest" --model-manifest-sha256 "$model_manifest_sha" --output-dir "$output" --run-mode "$run_mode" --seed "$seed")
-environment=(HOME="$HOME" USER="$USER" PATH="$(dirname "$python_bin"):/usr/bin:/bin" LANG="${LANG:-C.UTF-8}" TMPDIR="$scratch/tmp" XDG_CACHE_HOME="$scratch/cache" CUDA_VISIBLE_DEVICES="$gpu_index" PYTHONPATH="$scratch/code/backend" PYTHONNOUSERSITE=1 PYTHONDONTWRITEBYTECODE=1 TRANSFORMERS_OFFLINE=1 HF_HUB_OFFLINE=1)
+environment=(HOME="$HOME" USER="$USER" PATH="$(dirname "$python_bin"):/usr/bin:/bin" LANG="${LANG:-C.UTF-8}" TMPDIR="$scratch/tmp" XDG_CACHE_HOME="$scratch/cache" CUDA_VISIBLE_DEVICES="$gpu_index" PYTHONPATH="$scratch/code/backend" PYTHONNOUSERSITE=1 PYTHONDONTWRITEBYTECODE=1 TRANSFORMERS_OFFLINE=1 HF_HUB_OFFLINE=1 BIOCODER_VERIFIED_CODE_REVISION="$actual_revision" BIOCODER_TRAIN_INPUT_SCOPE=staged_train_artifacts_only BIOCODER_GPU_ALLOCATION_MODE=manual_physical_index_guard_no_slurm_gres CUBLAS_WORKSPACE_CONFIG=:4096:8)
 if [[ "$trainer" == grpo ]]; then
   env -i "${environment[@]}" "$python_bin" -m multimodal_science.qwen3vl.train_rl_cli "${common[@]}" --experiment "$experiment" "${resume[@]}"
 else
