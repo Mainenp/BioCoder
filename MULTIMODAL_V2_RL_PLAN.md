@@ -290,7 +290,7 @@ KL_k3  = exp(log π_ref − log π_θ) − (log π_ref − log π_θ) − 1     
 | `qwen3vl/rl_difficulty.py` + `rl_difficulty_cli.py`（新） | 第 4.2 节的难度筛选 |
 | `qwen3vl/rl_grpo_training.py` + `train_rl_cli.py`（新） | 第 5 节的 GRPO 循环：断点续训、双 adapter、记录诊断量 |
 | `qwen3vl/sft_continue_training.py`（新，或复用现有训练器加参数） | C1 |
-| `qwen3vl/rl_selection.py`（新） | 第 7.1 节的选择集评估和预注册的选择规则，输出绑定哈希的选择结果 |
+| `qwen3vl/rl_selection.py` + `rl_selection_inference.py` + `rl_candidate_matrix.py`（新） | 第 7.1 节的 16 候选检查点矩阵、答案物理隔离的贪心推理、选择集评估和预注册选择规则，输出绑定哈希的选择结果 |
 | `qwen3vl/localization_analysis.py`（新） | 第 7.3 节的边界误差、分层误差分析和失败案例抽样 |
 | `qwen3vl/slurm/coder_rl_*.sbatch`（新） | 沿用现有的单卡锁、哈希绑定、staging 等约定 |
 | `MULTIMODAL_V2_RL_RESULTS.md`（新） | 结果文档，格式参照 `MULTIMODAL_V11_RESULTS.md` |

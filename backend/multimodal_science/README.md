@@ -1204,8 +1204,9 @@ ZIP is `a402c31de998f4392ca66798ae8c6db18d227ccc634415d322d82b6b55520481`. The f
 table does not satisfy the separate BioCoder agent gate for tool selection,
 arguments, abstention, trajectory quality, evidence attribution, or UI behavior. The research
 pipeline is runnable through its CLIs and Slurm scripts; it is not yet a production FastAPI or
-LangGraph chromatogram tool. Reinforcement learning is explicitly a v2 experiment and requires a
-new sealed test set.
+LangGraph chromatogram tool. Reinforcement learning is explicitly a v2 experiment: it never
+reopens the v1 internal test and uses the validation split exactly once, only after a hash-sealed
+train-source selection decision.
 
 Post-seal V1.1 validation evidence is independently complete and inspectable through the three
 development commands above. It remains ineligible for the final benchmark and never changes the
@@ -1225,9 +1226,14 @@ The Slurm sequence is:
 2. `qwen3vl/slurm/coder_rl_difficulty.sbatch` runs train-only G=8 difficulty screening.
 3. `qwen3vl/slurm/coder_rl_train.sbatch` runs either GRPO or matched C1 continue-SFT, selected by
    `BIOCODER_RL_TRAINER=grpo|c1`; use `smoke` and `calibration` before any formal mode.
-4. `qwen3vl/slurm/coder_rl_selection.sbatch` builds/scores/seals the selection decision and owns
-   the one-time validation access ledger.
-5. `qwen3vl/slurm/coder_rl_localization.sbatch` accepts validation evaluations only after that
+4. `qwen3vl/slurm/coder_rl_selection.sbatch` builds the answer-separated selection bundle and the
+   exact 16-candidate C0/C1/R1/R2/R3 checkpoint matrix.
+5. `qwen3vl/slurm/coder_rl_selection_inference.sbatch` greedily decodes one candidate on the
+   selection prompts. Its staged view contains the prompt/XIC links and train signal tensor, but
+   physically excludes `selection_answers.jsonl`, the full bundle manifest, validation data, and
+   internal-test data. The CPU selection action then scores these predictions and seals the
+   preregistered choice.
+6. `qwen3vl/slurm/coder_rl_localization.sbatch` accepts validation evaluations only after that
    exact ledger is complete.
 
 Formal jobs must not be submitted until the two-step CUDA smoke proves adapter switching,

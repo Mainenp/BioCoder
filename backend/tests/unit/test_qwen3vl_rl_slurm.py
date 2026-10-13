@@ -58,6 +58,30 @@ class RlSlurmContractTests(unittest.TestCase):
         self.assertIn("chrompeak-qwen3vl-rl-selection-completion-v1", localization)
         self.assertIn("ONE_TIME_VALIDATION_LEDGER=OK", localization)
 
+    def test_selection_inference_stages_prompt_only_view_and_verified_runtime(self) -> None:
+        inference = self._script("coder_rl_selection_inference.sbatch")
+        self.assertIn(
+            '("selection_prompts", "selection_manifest", "selection_prompt_manifest")',
+            inference,
+        )
+        self.assertIn('not (bundle_dst / "selection_answers.jsonl").exists()', inference)
+        self.assertIn('not (bundle_dst / "artifact_manifest.sha256").exists()', inference)
+        self.assertIn(
+            'BIOCODER_SELECTION_INPUT_SCOPE="staged_selection_prompts_and_train_signals_only"',
+            inference,
+        )
+        self.assertIn("--candidate-json-sha256", inference)
+        self.assertIn("BIOCODER_RL_CANDIDATE_MATRIX_ROOT", inference)
+        self.assertIn("BIOCODER_RL_CANDIDATE_MATRIX_REPORT_SHA256", inference)
+        self.assertIn("BIOCODER_RL_SELECTION_OUTPUT_ROOT", inference)
+        self.assertIn("SLURM_ARRAY_TASK_ID", inference)
+        self.assertIn('report["counts"]["candidates"] != 16', inference)
+        self.assertIn('output="${BIOCODER_RL_SELECTION_OUTPUT_ROOT%/}/$candidate_id"', inference)
+        self.assertIn("QWEN3VL_RL_SELECTION_INFERENCE=OK", inference)
+        selection = self._script("coder_rl_selection.sbatch")
+        self.assertIn("build-candidates", selection)
+        self.assertIn("build_rl_candidate_matrix_cli", selection)
+
     def test_selection_cli_exposes_validation_lifecycle(self) -> None:
         begin = parser().parse_args(
             [

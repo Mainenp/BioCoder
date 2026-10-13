@@ -1,10 +1,16 @@
 import hashlib
 import json
+import os
+import shutil
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
 
+from multimodal_science.chrompeakformer.multimodal_dataset import DATASET_SCHEMA
 from multimodal_science.data.manifest import sha256_file
+from multimodal_science.qwen3vl.inference import AdapterSpec
 from multimodal_science.qwen3vl.rl_selection import (
     JSON_VALIDITY_THRESHOLD,
     begin_one_time_validation_access,
@@ -13,6 +19,11 @@ from multimodal_science.qwen3vl.rl_selection import (
     complete_one_time_validation_access,
     evaluate_selection_predictions,
     seal_selection_result,
+)
+from multimodal_science.qwen3vl.rl_selection_inference import (
+    load_answer_free_selection_inputs,
+    run_selection_inference,
+    verify_selection_candidate_runtime,
 )
 
 
@@ -30,7 +41,10 @@ def _jsonl(path: Path, values: list[dict]) -> None:
 
 def _bind_manifest(root: Path, *paths: Path) -> None:
     (root / "artifact_manifest.sha256").write_text(
-        "".join(f"{sha256_file(path)}  {path.name}\n" for path in paths),
+        "".join(
+            f"{sha256_file(path)}  {path.relative_to(root).as_posix()}\n"
+            for path in paths
+        ),
         encoding="utf-8",
     )
 
@@ -46,6 +60,7 @@ def _row(index: int, task: str, answer: str, group: str) -> dict:
         "target_peak_present": answer == '{"peak_present": true}',
         "prompt": "Locate the peak for a 100x10 image" if task == "peak_grounding" else "Decide peak presence",
         "expected_response": answer,
+        "signal": {"array": "train/signals.npy", "row": index, "available": True},
     }
 
 
@@ -86,8 +101,12 @@ def _candidate(root: Path, family: str, config: str, step: int, pool_sha: str) -
     training_root = candidate_root / "training"
     checkpoint_root.mkdir(parents=True)
     training_root.mkdir()
-    checkpoint = checkpoint_root / "checkpoint.json"; checkpoint.write_bytes(f"{family}:{config}:{step}".encode())
-    _bind_manifest(checkpoint_root, checkpoint)
+    adapter = checkpoint_root / "adapter"; adapter.mkdir()
+    adapter_config = adapter / "adapter_config.json"; _json(adapter_config, {"r": 8})
+    adapter_weights = adapter / "adapter_model.safetensors"; adapter_weights.write_bytes(f"weights:{family}:{config}:{step}".encode())
+    projector = checkpoint_root / "sensor_projector.safetensors"; projector.write_bytes(f"projector:{family}:{config}:{step}".encode())
+    checkpoint = checkpoint_root / "checkpoint.json"; _json(checkpoint, {"global_step": step})
+    _bind_manifest(checkpoint_root, checkpoint, adapter_config, adapter_weights, projector)
     training = training_root / f"{family}-{config}.json"
     report_sources = {} if family == "C0" else {"rl_pool_report_sha256": pool_sha}
     _json(training, {"sources": report_sources})
@@ -114,6 +133,9 @@ class SelectionTests(unittest.TestCase):
             bundle = build_selection_bundle(pool_root=pool, expected_pool_report_sha256=pool_sha, output_dir=root / "bundle", code_revision=REVISION)
             self.assertTrue(bundle.answers_path.is_file())
             self.assertNotIn("expected_response", bundle.prompts_path.read_text(encoding="utf-8"))
+            prompt = json.loads(bundle.prompts_path.read_text(encoding="utf-8").splitlines()[0])
+            self.assertEqual(prompt["signal"]["array"], "train/signals.npy")
+            self.assertTrue((bundle.output_dir / "selection_prompt_manifest.sha256").is_file())
             c0 = _candidate(root, "C0", "start", 0, pool_sha)
             r1 = _candidate(root, "R1", "lr1e-6", 100, pool_sha)
             c1 = _candidate(root, "C1", "lr1e-6", 100, pool_sha)
@@ -189,6 +211,151 @@ class SelectionTests(unittest.TestCase):
                     candidate=candidate,
                     output_dir=root / "evaluation",
                 )
+
+    def test_answer_free_generation_view_and_candidate_runtime(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            pool, pool_sha = _pool(root)
+            bundle = build_selection_bundle(
+                pool_root=pool,
+                expected_pool_report_sha256=pool_sha,
+                output_dir=root / "bundle",
+                code_revision=REVISION,
+            )
+            prompt_view = root / "prompt-view"
+            prompt_view.mkdir()
+            for name in (
+                "selection_bundle_report.json",
+                "selection_prompts.jsonl",
+                "selection_manifest.jsonl",
+                "selection_prompt_manifest.sha256",
+            ):
+                shutil.copy2(bundle.output_dir / name, prompt_view / name)
+            loaded = load_answer_free_selection_inputs(
+                prompt_view, bundle.report_sha256
+            )
+            self.assertEqual(len(loaded.records), bundle.records)
+            self.assertNotIn(
+                "expected_response",
+                json.dumps(loaded.records, sort_keys=True),
+            )
+            shutil.copy2(bundle.answers_path, prompt_view / bundle.answers_path.name)
+            with self.assertRaisesRegex(ValueError, "answers entered"):
+                load_answer_free_selection_inputs(prompt_view, bundle.report_sha256)
+
+            c0 = _candidate(root, "C0", "start", 0, pool_sha)
+            checkpoint_root = Path(c0["checkpoint"]["path"]).parent
+            starting = AdapterSpec(
+                root=checkpoint_root,
+                training_report_sha256=c0["training_report"]["sha256"],
+                manifest_sha256=sha256_file(
+                    checkpoint_root / "artifact_manifest.sha256"
+                ),
+            )
+            bound, runtime = verify_selection_candidate_runtime(
+                c0,
+                expected_pool_report_sha256=pool_sha,
+                starting_adapter=starting,
+            )
+            self.assertEqual(bound["candidate_id"], "C0:start:step-00000000")
+            self.assertEqual(runtime.adapter_dir, (checkpoint_root / "adapter").resolve())
+
+    def test_answer_free_selection_inference_is_complete_and_resumable(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            pool, pool_sha = _pool(root)
+            bundle = build_selection_bundle(
+                pool_root=pool,
+                expected_pool_report_sha256=pool_sha,
+                output_dir=root / "bundle",
+                code_revision=REVISION,
+            )
+            prompt_view = root / "prompt-view"
+            prompt_view.mkdir()
+            for name in (
+                "selection_bundle_report.json",
+                "selection_prompts.jsonl",
+                "selection_manifest.jsonl",
+                "selection_prompt_manifest.sha256",
+            ):
+                shutil.copy2(bundle.output_dir / name, prompt_view / name)
+            dataset = root / "dataset"
+            (dataset / "train").mkdir(parents=True)
+            signals = dataset / "train" / "signals.npy"
+            signals.write_bytes(b"fixture")
+            dataset_report = {
+                "schema_version": DATASET_SCHEMA,
+                "splits": ["train", "validation"],
+                "target_points": 160,
+                "internal_test_accessed": False,
+                "artifacts": {
+                    "train_signals": {
+                        "path": "train/signals.npy",
+                        "sha256": sha256_file(signals),
+                        "shape": [100, 160],
+                    }
+                },
+            }
+            dataset_report_path = dataset / "dataset_report.json"
+            _json(dataset_report_path, dataset_report)
+            c0 = _candidate(root, "C0", "start", 0, pool_sha)
+            candidate_path = root / "candidate.json"
+            _json(candidate_path, c0)
+            checkpoint_root = Path(c0["checkpoint"]["path"]).parent
+            starting = AdapterSpec(
+                root=checkpoint_root,
+                training_report_sha256=c0["training_report"]["sha256"],
+                manifest_sha256=sha256_file(
+                    checkpoint_root / "artifact_manifest.sha256"
+                ),
+            )
+
+            class FakeRuntime:
+                def __init__(self, **_kwargs):
+                    self.metadata = {"visual_forward_calls": 0, "backend": "fake"}
+
+                def greedy_completion(self, record, *, max_new_tokens):
+                    self.assertions = (record, max_new_tokens)
+                    return SimpleNamespace(
+                        response='{"peak_present": true}',
+                        token_ids=(1, 2),
+                        terminated_with_eos=True,
+                    )
+
+                def close(self):
+                    return None
+
+            environment = {
+                "BIOCODER_VERIFIED_CODE_REVISION": REVISION,
+                "BIOCODER_SELECTION_INPUT_SCOPE": "staged_selection_prompts_and_train_signals_only",
+                "BIOCODER_GPU_ALLOCATION_MODE": "manual_physical_index_guard_no_slurm_gres",
+            }
+            with patch.dict(os.environ, environment, clear=False):
+                result = run_selection_inference(
+                    code_revision=REVISION,
+                    bundle_root=prompt_view,
+                    bundle_report_sha256=bundle.report_sha256,
+                    dataset_root=dataset,
+                    dataset_report_sha256=sha256_file(dataset_report_path),
+                    starting_adapter=starting,
+                    candidate_path=candidate_path,
+                    candidate_descriptor_sha256=sha256_file(candidate_path),
+                    model_name_or_path=str(root / "model"),
+                    model_revision="model-revision",
+                    model_artifact_sha256="c" * 64,
+                    model_manifest_path=root / "model-manifest.sha256",
+                    model_manifest_sha256="d" * 64,
+                    output_dir=root / "output",
+                    runtime_factory=FakeRuntime,
+                )
+            self.assertEqual(result.prediction_records, bundle.records)
+            self.assertEqual(
+                len(result.predictions_path.read_text(encoding="utf-8").splitlines()),
+                bundle.records,
+            )
+            report = json.loads(result.report_path.read_text(encoding="utf-8"))
+            self.assertFalse(report["contracts"]["selection_answers_opened"])
+            self.assertEqual(report["runtime"]["visual_forward_calls"], 0)
 
 
 if __name__ == "__main__":

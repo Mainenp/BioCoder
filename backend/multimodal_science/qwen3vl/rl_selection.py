@@ -26,8 +26,8 @@ from multimodal_science.qwen3vl.rl_data import (
 from multimodal_science.qwen3vl.task_scoring import score_task_response
 
 
-SELECTION_BUNDLE_SCHEMA = "chrompeak-qwen3vl-rl-selection-bundle-v1"
-SELECTION_PROMPT_SCHEMA = "chrompeak-qwen3vl-rl-selection-prompt-v1"
+SELECTION_BUNDLE_SCHEMA = "chrompeak-qwen3vl-rl-selection-bundle-v2"
+SELECTION_PROMPT_SCHEMA = "chrompeak-qwen3vl-rl-selection-prompt-v2"
 SELECTION_ANSWER_SCHEMA = "chrompeak-qwen3vl-rl-selection-answer-v1"
 SELECTION_MANIFEST_SCHEMA = "chrompeak-qwen3vl-rl-selection-manifest-v1"
 SELECTION_EVALUATION_SCHEMA = "chrompeak-qwen3vl-rl-selection-evaluation-v1"
@@ -232,17 +232,55 @@ def build_selection_bundle(*, pool_root: Path, expected_pool_report_sha256: str,
             prompt_text = row.get("prompt")
             expected = row.get("expected_response")
             _require(instruction_id and isinstance(prompt_text, str) and isinstance(expected, str), "Invalid selection row")
-            prompts.append({"schema_version": SELECTION_PROMPT_SCHEMA, "instruction_id": instruction_id, "task": task, "language": row.get("language"), "conversations": [{"from": "human", "value": prompt_text}]})
+            signal = _object(row.get("signal"), "selection signal link")
+            signal_array = signal.get("array")
+            signal_row = signal.get("row")
+            signal_available = signal.get("available")
+            _require(
+                isinstance(signal_array, str)
+                and bool(signal_array)
+                and isinstance(signal_row, int)
+                and signal_row >= 0
+                and isinstance(signal_available, bool),
+                "Invalid selection signal link",
+            )
+            prompts.append(
+                {
+                    "schema_version": SELECTION_PROMPT_SCHEMA,
+                    "instruction_id": instruction_id,
+                    "task": task,
+                    "language": row.get("language"),
+                    "conversations": [{"from": "human", "value": prompt_text}],
+                    "signal": {
+                        "array": signal_array,
+                        "row": signal_row,
+                        "available": signal_available,
+                    },
+                }
+            )
             answers.append({"schema_version": SELECTION_ANSWER_SCHEMA, "instruction_id": instruction_id, "task": task, "expected_response": expected})
             manifest.append({"schema_version": SELECTION_MANIFEST_SCHEMA, "instruction_id": instruction_id, "task": task, "language": row.get("language"), "group_id": row.get("group_id"), "source_path": row.get("source_path"), "source_stratum": row.get("source_stratum"), "target_peak_present": row.get("target_peak_present"), "prompt_sha256": hashlib.sha256(prompt_text.encode("utf-8")).hexdigest(), "response_sha256": hashlib.sha256(expected.encode("utf-8")).hexdigest(), "source_selection_row": index})
         prompts_path, answers_path, manifest_path = staging / "selection_prompts.jsonl", staging / "selection_answers.jsonl", staging / "selection_manifest.jsonl"
         _write_jsonl(prompts_path, prompts); _write_jsonl(answers_path, answers); _write_jsonl(manifest_path, manifest)
-        report = {"schema_version": SELECTION_BUNDLE_SCHEMA, "code_revision": code_revision, "created_at": datetime.now(timezone.utc).isoformat(), "sources": {"rl_pool_report_sha256": expected_pool_report_sha256, "rl_selection_set_sha256": _artifact(pool_root.resolve(), pool_report, "selection_set")[1]["sha256"]}, "counts": {"instructions": len(rows), "source_groups": len({row["group_id"] for row in rows})}, "contracts": {"selection_source_groups_only": True, "validation_answers_opened": False, "validation_prompts_opened": False, "internal_test_accessed": False, "training_selection_source_group_overlap": 0, "answers_separated_from_prompts": True}, "artifacts": {}}
+        prompt_manifest_path = staging / "selection_prompt_manifest.sha256"
+        prompt_manifest_path.write_text(
+            "".join(
+                f"{sha256_file(path)}  {path.name}\n"
+                for path in (prompts_path, manifest_path)
+            ),
+            encoding="utf-8",
+        )
+        report = {"schema_version": SELECTION_BUNDLE_SCHEMA, "code_revision": code_revision, "created_at": datetime.now(timezone.utc).isoformat(), "sources": {"rl_pool_report_sha256": expected_pool_report_sha256, "rl_selection_set_sha256": _artifact(pool_root.resolve(), pool_report, "selection_set")[1]["sha256"]}, "counts": {"instructions": len(rows), "source_groups": len({row["group_id"] for row in rows})}, "contracts": {"selection_source_groups_only": True, "validation_answers_opened": False, "validation_prompts_opened": False, "internal_test_accessed": False, "training_selection_source_group_overlap": 0, "answers_separated_from_prompts": True, "answer_free_generation_view_available": True}, "artifacts": {}}
         for name, path, records in (("selection_prompts", prompts_path, len(prompts)), ("selection_answers", answers_path, len(answers)), ("selection_manifest", manifest_path, len(manifest))):
             report["artifacts"][name] = {"path": path.name, "sha256": sha256_file(path), "records": records}
+        report["artifacts"]["selection_prompt_manifest"] = {
+            "path": prompt_manifest_path.name,
+            "sha256": sha256_file(prompt_manifest_path),
+            "records": 2,
+        }
         report_path = staging / "selection_bundle_report.json"; _write_json(report_path, report)
         manifest_hash = staging / "artifact_manifest.sha256"
-        manifest_hash.write_text("".join(f"{sha256_file(path)}  {path.name}\n" for path in (prompts_path, answers_path, manifest_path, report_path)), encoding="utf-8")
+        manifest_hash.write_text("".join(f"{sha256_file(path)}  {path.name}\n" for path in (prompts_path, answers_path, manifest_path, prompt_manifest_path, report_path)), encoding="utf-8")
         staging.replace(output_dir)
     report_path = output_dir / "selection_bundle_report.json"
     return SelectionBundleResult(output_dir, report_path, sha256_file(report_path), output_dir / "selection_prompts.jsonl", output_dir / "selection_answers.jsonl", output_dir / "selection_manifest.jsonl", len(rows))

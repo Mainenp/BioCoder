@@ -1,3 +1,4 @@
+import inspect
 import unittest
 from pathlib import Path
 
@@ -9,6 +10,7 @@ from multimodal_science.qwen3vl.rl_difficulty import (
     select_difficulty_records,
 )
 from multimodal_science.qwen3vl.rl_rollout import (
+    XicSamplingRuntime,
     increment_mrope_position,
     sample_seed,
 )
@@ -97,6 +99,9 @@ class RLDifficultyTests(unittest.TestCase):
         positions = np.array([[[4]], [[4]], [[4]]], dtype=np.int64)
         incremented = increment_mrope_position(positions)
         np.testing.assert_array_equal(incremented, np.array([[[5]], [[5]], [[5]]]))
+        greedy_source = inspect.getsource(XicSamplingRuntime.greedy_completion)
+        self.assertIn("torch.argmax", greedy_source)
+        self.assertIn("increment_mrope_position(current_position)", greedy_source)
 
 
 if __name__ == "__main__":

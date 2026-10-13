@@ -73,6 +73,17 @@ class VerifiedTrainSignals:
     shape: tuple[int, int]
 
 
+@dataclass(frozen=True)
+class VerifiedXicRuntimeWeights:
+    """Manifest-verified XIC-only adapter/projector selected outside this runtime."""
+
+    adapter_dir: Path
+    projector_path: Path
+    candidate_id: str
+    training_report_sha256: str
+    checkpoint_manifest_sha256: str
+
+
 def verify_train_signals(
     dataset_root: Path, expected_report_sha256: str
 ) -> VerifiedTrainSignals:
@@ -152,12 +163,21 @@ class XicSamplingRuntime:
         model_manifest_sha256: str,
         starting_adapter: AdapterSpec,
         train_signals: VerifiedTrainSignals,
+        runtime_weights: VerifiedXicRuntimeWeights | None = None,
         attention_implementation: str = "sdpa",
         seed: int = 17,
     ) -> None:
-        assert_no_protected_input_paths(
-            [model_name_or_path, model_manifest_path, starting_adapter.root, train_signals.path]
-        )
+        protected_inputs: list[str | Path] = [
+            model_name_or_path,
+            model_manifest_path,
+            starting_adapter.root,
+            train_signals.path,
+        ]
+        if runtime_weights is not None:
+            protected_inputs.extend(
+                [runtime_weights.adapter_dir, runtime_weights.projector_path]
+            )
+        assert_no_protected_input_paths(protected_inputs)
         try:
             transformers_version = version("transformers")
         except PackageNotFoundError as error:
@@ -190,6 +210,17 @@ class XicSamplingRuntime:
             trained_attention == attention_implementation,
             "Rollout attention differs from the starting artifact",
         )
+        adapter_dir = verified.adapter_dir
+        projector_path = verified.projector_path
+        if runtime_weights is not None:
+            adapter_dir = runtime_weights.adapter_dir.resolve()
+            projector_path = runtime_weights.projector_path.resolve()
+            _require(
+                (adapter_dir / "adapter_config.json").is_file()
+                and (adapter_dir / "adapter_model.safetensors").is_file(),
+                "Verified runtime adapter is incomplete",
+            )
+            _require(projector_path.is_file(), "Verified runtime projector is missing")
 
         random.seed(seed)
         torch.manual_seed(seed)
@@ -205,7 +236,7 @@ class XicSamplingRuntime:
         )
         self._model = PeftModel.from_pretrained(
             base_model,
-            verified.adapter_dir,
+            adapter_dir,
             is_trainable=False,
         ).to(device).eval()
         self._model.config.use_cache = True
@@ -223,7 +254,7 @@ class XicSamplingRuntime:
             verified.processor_dir, trust_remote_code=False
         )
         self._projector = build_sensor_projector(verified.projector_spec).to(device).eval()
-        self._projector.load_state_dict(load_file(str(verified.projector_path)))
+        self._projector.load_state_dict(load_file(str(projector_path)))
         self._signals = np.load(train_signals.path, mmap_mode="r", allow_pickle=False)
         _require(tuple(self._signals.shape) == train_signals.shape, "Train signal shape drift")
         _require(self._signals.dtype == np.float32, "Train signals must be float32")
@@ -255,6 +286,19 @@ class XicSamplingRuntime:
             "model_manifest_sha256": model_manifest_sha256,
             "starting_training_report_sha256": starting_adapter.training_report_sha256,
             "starting_manifest_sha256": starting_adapter.manifest_sha256,
+            "candidate_id": (
+                runtime_weights.candidate_id if runtime_weights is not None else "C0"
+            ),
+            "candidate_training_report_sha256": (
+                runtime_weights.training_report_sha256
+                if runtime_weights is not None
+                else starting_adapter.training_report_sha256
+            ),
+            "candidate_checkpoint_manifest_sha256": (
+                runtime_weights.checkpoint_manifest_sha256
+                if runtime_weights is not None
+                else starting_adapter.manifest_sha256
+            ),
             "dataset_report_sha256": train_signals.report_sha256,
             "input_modality": "xic_only",
             "sensor_projector": verified.projector_spec.as_dict(),
@@ -407,3 +451,75 @@ class XicSamplingRuntime:
                     )
                 )
         return completions
+
+    def greedy_completion(
+        self,
+        record: dict[str, Any],
+        *,
+        max_new_tokens: int = 64,
+    ) -> SampledCompletion:
+        """Decode one selection prompt greedily with explicit Qwen mRoPE positions."""
+
+        _require(max_new_tokens == 64, "The preregistered answer cap is 64 tokens")
+        instruction_id = str(record.get("instruction_id") or "")
+        _require(instruction_id != "", "RL record has no instruction ID")
+        torch = self._torch
+        generated: list[int] = []
+        terminated = False
+        with torch.inference_mode(), torch.autocast(
+            device_type="cuda", dtype=torch.bfloat16
+        ):
+            inputs_embeds, attention_mask, position_ids, _ = self._encode_prompt(record)
+            outputs = self._model(
+                input_ids=None,
+                inputs_embeds=inputs_embeds,
+                attention_mask=attention_mask,
+                position_ids=position_ids,
+                use_cache=True,
+                return_dict=True,
+            )
+            _require(self._visual_forward_calls == 0, "RL selection used image pixels")
+            logits = outputs.logits[:, -1, :]
+            cache = outputs.past_key_values
+            current_position = position_ids[:, :, -1:] + 1
+            _require(
+                torch.equal(current_position[0], current_position[1])
+                and torch.equal(current_position[1], current_position[2]),
+                "XIC-only mRoPE axes diverged before greedy decoding",
+            )
+            eos_ids = _eos_token_ids(self._model.generation_config.eos_token_id)
+            for _ in range(max_new_tokens):
+                next_token = torch.argmax(logits, dim=-1, keepdim=True)
+                token_id = int(next_token.item())
+                generated.append(token_id)
+                if token_id in eos_ids:
+                    terminated = True
+                    break
+                attention_mask = torch.cat(
+                    (
+                        attention_mask,
+                        torch.ones_like(next_token, dtype=attention_mask.dtype),
+                    ),
+                    dim=1,
+                )
+                outputs = self._model(
+                    input_ids=next_token,
+                    attention_mask=attention_mask,
+                    position_ids=current_position,
+                    past_key_values=cache,
+                    use_cache=True,
+                    return_dict=True,
+                )
+                logits = outputs.logits[:, -1, :]
+                cache = outputs.past_key_values
+                current_position = increment_mrope_position(current_position)
+        return SampledCompletion(
+            response=self._processor.decode(
+                generated,
+                skip_special_tokens=True,
+                clean_up_tokenization_spaces=False,
+            ),
+            token_ids=tuple(generated),
+            terminated_with_eos=terminated,
+            sample_seed=sample_seed(self._seed, instruction_id, 0),
+        )
