@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 import tempfile
 import unittest
 from pathlib import Path
@@ -11,6 +12,8 @@ from multimodal_science.qwen3vl.evaluation import (
     BILINGUAL_EVALUATION_REPORT_SCHEMA,
 )
 from multimodal_science.qwen3vl.localization_analysis import (
+    METADATA_REPORT_SCHEMA,
+    METADATA_SCHEMA,
     REPORT_SCHEMA,
     _failures,
     _localization_metrics,
@@ -18,6 +21,7 @@ from multimodal_science.qwen3vl.localization_analysis import (
     _stratum,
     _tertile_boundaries,
     analyze_localization,
+    build_localization_metadata,
 )
 
 
@@ -96,6 +100,78 @@ def _metadata(path: Path) -> str:
     return sha256_file(path)
 
 
+def _metadata_sources(root: Path) -> tuple[Path, str, Path, str]:
+    dataset = root / "dataset"
+    fusion = root / "fusion"
+    (dataset / "validation").mkdir(parents=True)
+    fusion.mkdir()
+    examples = []
+    links = []
+    for group in range(11):
+        asset_id = f"asset-{group}"
+        pair_id = f"{asset_id}-peak_grounding"
+        examples.append(
+            {
+                "asset_id": asset_id,
+                "group_id": f"group-{group}",
+                "metadata": {
+                    "log1p_raw_maximum": math.log1p(10.0 * (group + 1)),
+                    "roi_window_minutes": [1.0, 3.0],
+                },
+            }
+        )
+        for language in ("en", "zh-CN"):
+            links.append(
+                {
+                    "task": "peak_grounding",
+                    "language": language,
+                    "pair_id": pair_id,
+                    "asset_id": asset_id,
+                    "group_id": f"group-{group}",
+                }
+            )
+    examples_path = dataset / "validation" / "examples.jsonl"
+    links_path = fusion / "validation_xic_links.jsonl"
+    examples_path.write_text(
+        "".join(json.dumps(row, sort_keys=True) + "\n" for row in examples),
+        encoding="utf-8",
+    )
+    links_path.write_text(
+        "".join(json.dumps(row, sort_keys=True) + "\n" for row in links),
+        encoding="utf-8",
+    )
+    dataset_report = {
+        "internal_test_accessed": False,
+        "artifacts": {
+            "validation_examples": {
+                "path": "validation/examples.jsonl",
+                "sha256": sha256_file(examples_path),
+                "records": len(examples),
+            }
+        },
+    }
+    fusion_report = {
+        "internal_test_accessed": False,
+        "artifacts": {
+            "validation_xic_links": {
+                "path": links_path.name,
+                "sha256": sha256_file(links_path),
+                "records": len(links),
+            }
+        },
+    }
+    dataset_report_path = dataset / "dataset_report.json"
+    fusion_report_path = fusion / "fusion_bundle_report.json"
+    _write_json(dataset_report_path, dataset_report)
+    _write_json(fusion_report_path, fusion_report)
+    return (
+        dataset,
+        sha256_file(dataset_report_path),
+        fusion,
+        sha256_file(fusion_report_path),
+    )
+
+
 class LocalizationAnalysisTests(unittest.TestCase):
     def _build(self, directory: Path, **overrides: object):
         directory.mkdir(parents=True, exist_ok=True)
@@ -112,6 +188,66 @@ class LocalizationAnalysisTests(unittest.TestCase):
         self.assertEqual(metrics["iou_at_0_75"], 0.0)
         self.assertEqual(metrics["start_error_pixels"], 0.0)
         self.assertEqual(metrics["start_error_seconds"], 0.0)
+
+    def test_builds_answer_free_hash_bound_localization_metadata(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            dataset, dataset_sha, fusion, fusion_sha = _metadata_sources(root)
+            result = build_localization_metadata(
+                dataset_root=dataset,
+                expected_dataset_report_sha256=dataset_sha,
+                fusion_bundle_root=fusion,
+                expected_fusion_bundle_report_sha256=fusion_sha,
+                output_dir=root / "metadata",
+            )
+            report = json.loads(result.report_path.read_text(encoding="utf-8"))
+            rows = [
+                json.loads(line)
+                for line in result.metadata_path.read_text(encoding="utf-8").splitlines()
+            ]
+            self.assertEqual(report["schema_version"], METADATA_REPORT_SCHEMA)
+            self.assertEqual(report["counts"], {"records": 11, "source_groups": 11})
+            self.assertEqual(report["contracts"]["validation_answers_opened"], False)
+            self.assertEqual(report["contracts"]["internal_test_accessed"], False)
+            self.assertEqual(len(rows), 11)
+            self.assertTrue(all(row["schema_version"] == METADATA_SCHEMA for row in rows))
+            self.assertAlmostEqual(rows[0]["raw_max"], 10.0)
+            self.assertEqual(rows[0]["roi_window_minutes"], [1.0, 3.0])
+            _manifest_entries = result.manifest_path.read_text(encoding="utf-8")
+            self.assertIn("validation_localization_metadata.jsonl", _manifest_entries)
+            self.assertIn("validation_localization_metadata_report.json", _manifest_entries)
+
+    def test_localization_metadata_rejects_hash_and_bilingual_drift(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            dataset, dataset_sha, fusion, fusion_sha = _metadata_sources(root)
+            with self.assertRaisesRegex(ValueError, "Dataset report drift"):
+                build_localization_metadata(
+                    dataset_root=dataset,
+                    expected_dataset_report_sha256="0" * 64,
+                    fusion_bundle_root=fusion,
+                    expected_fusion_bundle_report_sha256=fusion_sha,
+                    output_dir=root / "bad-hash",
+                )
+            links_path = fusion / "validation_xic_links.jsonl"
+            links = [json.loads(line) for line in links_path.read_text(encoding="utf-8").splitlines()]
+            links[1]["group_id"] = "drifted-group"
+            links_path.write_text(
+                "".join(json.dumps(row, sort_keys=True) + "\n" for row in links),
+                encoding="utf-8",
+            )
+            fusion_report_path = fusion / "fusion_bundle_report.json"
+            fusion_report = json.loads(fusion_report_path.read_text(encoding="utf-8"))
+            fusion_report["artifacts"]["validation_xic_links"]["sha256"] = sha256_file(links_path)
+            _write_json(fusion_report_path, fusion_report)
+            with self.assertRaisesRegex(ValueError, "Bilingual localization metadata drift"):
+                build_localization_metadata(
+                    dataset_root=dataset,
+                    expected_dataset_report_sha256=dataset_sha,
+                    fusion_bundle_root=fusion,
+                    expected_fusion_bundle_report_sha256=sha256_file(fusion_report_path),
+                    output_dir=root / "drift",
+                )
 
     def test_fixed_tertiles_are_shared_and_ties_are_low(self) -> None:
         rows = []

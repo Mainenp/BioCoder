@@ -91,6 +91,52 @@ code_short="${code_revision:0:7}"
 adapter_short="${adapter_report_sha256:0:12}"
 model_short="${model_artifact_sha256:0:16}"
 
+if [[ -z "$rl_candidate_json" && -z "$rl_candidate_sha" \
+      && -n "$rl_candidate_matrix_root" && -n "$rl_candidate_matrix_sha" \
+      && -n "${SLURM_ARRAY_TASK_ID:-}" ]]; then
+  [[ "$SLURM_ARRAY_TASK_ID" =~ ^([0-9]|1[0-5])$ ]] || {
+    echo "RL validation array task must be in [0, 15]" >&2
+    exit 2
+  }
+  mapfile -t rl_candidate_info < <(
+    "$python_bin" - "$rl_candidate_matrix_root" "$rl_candidate_matrix_sha" "$SLURM_ARRAY_TASK_ID" <<'PY'
+import hashlib
+import json
+import pathlib
+import sys
+
+root = pathlib.Path(sys.argv[1]).resolve()
+expected = sys.argv[2]
+index = int(sys.argv[3])
+digest = lambda path: hashlib.sha256(path.read_bytes()).hexdigest()
+report_path = root / "candidate_matrix_report.json"
+if digest(report_path) != expected:
+    raise ValueError("Candidate matrix report drift")
+report = json.loads(report_path.read_text(encoding="utf-8"))
+artifact = report.get("artifacts", {}).get("candidate_list", {})
+candidate_list = (root / str(artifact.get("path"))).resolve()
+if not candidate_list.is_relative_to(root) or digest(candidate_list) != artifact.get("sha256"):
+    raise ValueError("Candidate list drift")
+rows = [json.loads(line) for line in candidate_list.read_text(encoding="utf-8").splitlines() if line.strip()]
+if len(rows) != 16 or report.get("counts", {}).get("candidates") != 16:
+    raise ValueError("Candidate matrix must contain exactly 16 rows")
+row = rows[index]
+path = (root / str(row.get("path"))).resolve()
+if not path.is_relative_to(root) or digest(path) != row.get("sha256"):
+    raise ValueError("Candidate descriptor drift")
+print(path)
+print(row["sha256"])
+PY
+  )
+  [[ "${#rl_candidate_info[@]}" -eq 2 ]] || {
+    echo "RL validation array candidate resolution failed" >&2
+    exit 2
+  }
+  rl_candidate_json="${rl_candidate_info[0]}"
+  rl_candidate_sha="${rl_candidate_info[1]}"
+  echo "ARRAY_TASK_ID=$SLURM_ARRAY_TASK_ID"
+fi
+
 for value in \
   "$seed" "$max_new_tokens" "$bootstrap_iterations" "$xic_intervention_seed" "$max_gpu_used_mib" \
   "$max_gpu_utilization" "$min_local_free_gib"

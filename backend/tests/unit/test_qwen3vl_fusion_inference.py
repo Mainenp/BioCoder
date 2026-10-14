@@ -154,6 +154,8 @@ class FusionInferenceContractTests(unittest.TestCase):
         self.assertIn("RL_VALIDATION_LEDGER=OPEN_AND_HASH_BOUND", script)
         self.assertIn("verify_rl_validation_access >/dev/null", script[answer_start:])
         self.assertIn('${rl_candidate_sha:0:12}', script)
+        self.assertIn('SLURM_ARRAY_TASK_ID', script)
+        self.assertIn('RL validation array task must be in [0, 15]', script)
         self.assertIn("QWEN3VL_RL_VALIDATION_EVALUATION=OK", script)
 
     def test_shuffled_xic_is_seeded_deranged_and_asset_stable(self) -> None:

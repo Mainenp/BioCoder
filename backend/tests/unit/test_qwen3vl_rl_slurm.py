@@ -58,6 +58,17 @@ class RlSlurmContractTests(unittest.TestCase):
         self.assertIn("chrompeak-qwen3vl-rl-selection-completion-v1", localization)
         self.assertIn("ONE_TIME_VALIDATION_LEDGER=OK", localization)
 
+    def test_localization_metadata_job_is_answer_free_and_hash_bound(self) -> None:
+        metadata = self._script("coder_rl_localization_metadata.sbatch")
+        self.assertIn("BIOCODER_DATASET_REPORT_SHA256", metadata)
+        self.assertIn("BIOCODER_FUSION_BUNDLE_REPORT_SHA256", metadata)
+        self.assertIn("build_localization_metadata_cli", metadata)
+        self.assertIn("VALIDATION_ANSWERS_OPENED=false", metadata)
+        self.assertIn("INTERNAL_TEST_ACCESSED=false", metadata)
+        self.assertNotIn("ANSWER_PATH", metadata)
+        self.assertNotIn("BIOCODER_INTERNAL_TEST", metadata)
+        self.assertIn("QWEN3VL_RL_LOCALIZATION_METADATA=OK", metadata)
+
     def test_selection_inference_stages_prompt_only_view_and_verified_runtime(self) -> None:
         inference = self._script("coder_rl_selection_inference.sbatch")
         self.assertIn(

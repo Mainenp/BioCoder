@@ -33,6 +33,8 @@ from multimodal_science.qwen3vl.evaluation import (
 
 REPORT_SCHEMA = "chrompeak-qwen3vl-v2-localization-analysis-v1"
 FAILURE_SCHEMA = "chrompeak-qwen3vl-v2-localization-failure-v1"
+METADATA_SCHEMA = "chrompeak-qwen3vl-v2-localization-metadata-v1"
+METADATA_REPORT_SCHEMA = "chrompeak-qwen3vl-v2-localization-metadata-report-v1"
 VALIDATION_SOURCE_GROUPS = 11
 SCOPES = ("overall", *LANGUAGES)
 MODELS = ("c0", "c1", "rl")
@@ -46,6 +48,16 @@ class LocalizationAnalysisResult:
     report_sha256: str
     markdown_path: Path
     failure_cases_path: Path
+    manifest_path: Path
+
+
+@dataclass(frozen=True)
+class LocalizationMetadataResult:
+    output_dir: Path
+    report_path: Path
+    report_sha256: str
+    metadata_path: Path
+    metadata_sha256: str
     manifest_path: Path
 
 
@@ -242,6 +254,180 @@ def _metadata_index(rows: Iterable[dict[str, Any]]) -> dict[tuple[str, str], dic
         index[key] = row
     _require(index, "Validation metadata is empty")
     return index
+
+
+def _bound_report_artifact(
+    root: Path,
+    report: dict[str, Any],
+    name: str,
+) -> tuple[Path, dict[str, Any]]:
+    descriptor = _object(
+        _object(report.get("artifacts"), "source artifacts").get(name),
+        f"source artifact {name}",
+    )
+    relative = _safe_relative(str(descriptor.get("path") or ""), name)
+    path = (root / relative).resolve()
+    _require(path.is_relative_to(root), f"Source artifact escapes root: {name}")
+    expected = descriptor.get("sha256")
+    _require(
+        isinstance(expected, str)
+        and bool(_HEX_64.fullmatch(expected))
+        and path.is_file()
+        and sha256_file(path) == expected,
+        f"Source artifact drift: {name}",
+    )
+    return path, descriptor
+
+
+def build_localization_metadata(
+    *,
+    dataset_root: Path,
+    expected_dataset_report_sha256: str,
+    fusion_bundle_root: Path,
+    expected_fusion_bundle_report_sha256: str,
+    output_dir: Path,
+) -> LocalizationMetadataResult:
+    """Materialize answer-free validation covariates for the frozen analysis."""
+
+    dataset_root = _assert_development_path(dataset_root, "Dataset root")
+    fusion_bundle_root = _assert_development_path(fusion_bundle_root, "fusion bundle root")
+    output_dir = _assert_development_path(output_dir, "localization metadata output")
+    _require(not output_dir.exists(), f"Localization metadata output exists: {output_dir}")
+    for digest, label in (
+        (expected_dataset_report_sha256, "Dataset report"),
+        (expected_fusion_bundle_report_sha256, "fusion bundle report"),
+    ):
+        _require(bool(_HEX_64.fullmatch(digest)), f"Invalid {label} SHA-256")
+    dataset_report_path = dataset_root / "dataset_report.json"
+    fusion_report_path = fusion_bundle_root / "fusion_bundle_report.json"
+    _require(
+        sha256_file(dataset_report_path) == expected_dataset_report_sha256,
+        "Dataset report drift",
+    )
+    _require(
+        sha256_file(fusion_report_path) == expected_fusion_bundle_report_sha256,
+        "Fusion bundle report drift",
+    )
+    dataset = _read_object(dataset_report_path, "Dataset report")
+    fusion = _read_object(fusion_report_path, "fusion bundle report")
+    _require(dataset.get("internal_test_accessed") is False, "Dataset used internal test")
+    _require(fusion.get("internal_test_accessed") is False, "Fusion bundle used internal test")
+    validation_examples_path, examples_artifact = _bound_report_artifact(
+        dataset_root, dataset, "validation_examples"
+    )
+    validation_links_path, links_artifact = _bound_report_artifact(
+        fusion_bundle_root, fusion, "validation_xic_links"
+    )
+    examples = _read_jsonl(validation_examples_path, "validation examples")
+    links = _read_jsonl(validation_links_path, "validation XIC links")
+    _require(examples_artifact.get("records") == len(examples), "Validation example count drift")
+    _require(links_artifact.get("records") == len(links), "Validation link count drift")
+    examples_by_asset = {str(row.get("asset_id")): row for row in examples}
+    _require(len(examples_by_asset) == len(examples), "Duplicate validation asset ID")
+    rows_by_pair: dict[str, dict[str, Any]] = {}
+    for link in links:
+        if link.get("task") != "peak_grounding":
+            continue
+        pair_id = link.get("pair_id")
+        asset_id = str(link.get("asset_id") or "")
+        _require(isinstance(pair_id, str) and bool(pair_id), "Grounding link lacks pair ID")
+        _require(asset_id in examples_by_asset, "Grounding link references an unknown asset")
+        example = examples_by_asset[asset_id]
+        metadata = _object(example.get("metadata"), "validation example metadata")
+        log_max = _number(metadata.get("log1p_raw_maximum"), "log1p raw maximum")
+        _require(log_max >= 0.0, "Validation log1p raw maximum is negative")
+        group_id = link.get("group_id")
+        _require(
+            isinstance(group_id, str) and bool(group_id),
+            "Grounding link lacks a source group",
+        )
+        roi = metadata.get("roi_window_minutes")
+        _require(
+            isinstance(roi, list)
+            and len(roi) == 2
+            and _number(roi[1], "ROI high") > _number(roi[0], "ROI low"),
+            "Validation ROI window must increase",
+        )
+        row = {
+            "schema_version": METADATA_SCHEMA,
+            "task": "peak_grounding",
+            "pair_id": pair_id,
+            "asset_id": asset_id,
+            "group_id": group_id,
+            "raw_max": math.expm1(log_max),
+            "roi_window_minutes": roi,
+        }
+        previous = rows_by_pair.setdefault(pair_id, row)
+        _require(previous == row, f"Bilingual localization metadata drift: {pair_id}")
+    rows = [rows_by_pair[key] for key in sorted(rows_by_pair)]
+    _require(rows, "No grounding localization metadata was produced")
+    _require(
+        len({row["group_id"] for row in rows}) == VALIDATION_SOURCE_GROUPS,
+        "Localization metadata must cover all validation source groups",
+    )
+
+    output_dir.parent.mkdir(parents=True, exist_ok=True)
+    staging = output_dir.parent / f".{output_dir.name}-{uuid.uuid4().hex}.staging"
+    staging.mkdir()
+    try:
+        metadata_path = staging / "validation_localization_metadata.jsonl"
+        metadata_path.write_text(
+            "".join(json.dumps(row, ensure_ascii=False, sort_keys=True) + "\n" for row in rows),
+            encoding="utf-8",
+        )
+        report = {
+            "schema_version": METADATA_REPORT_SCHEMA,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "sources": {
+                "dataset_report_sha256": expected_dataset_report_sha256,
+                "fusion_bundle_report_sha256": expected_fusion_bundle_report_sha256,
+                "validation_examples_sha256": examples_artifact["sha256"],
+                "validation_xic_links_sha256": links_artifact["sha256"],
+            },
+            "counts": {
+                "records": len(rows),
+                "source_groups": len({row["group_id"] for row in rows}),
+            },
+            "contracts": {
+                "answer_free": True,
+                "validation_answers_opened": False,
+                "internal_test_accessed": False,
+                "bilingual_pairs_deduplicated": True,
+            },
+            "artifacts": {
+                "validation_localization_metadata": {
+                    "path": metadata_path.name,
+                    "sha256": sha256_file(metadata_path),
+                    "records": len(rows),
+                }
+            },
+        }
+        report_path = staging / "validation_localization_metadata_report.json"
+        report_path.write_text(
+            json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True, allow_nan=False) + "\n",
+            encoding="utf-8",
+        )
+        manifest_path = staging / "artifact_manifest.sha256"
+        manifest_path.write_text(
+            "".join(
+                f"{sha256_file(path)}  {path.name}\n"
+                for path in (metadata_path, report_path)
+            ),
+            encoding="utf-8",
+        )
+        staging.replace(output_dir)
+    finally:
+        shutil.rmtree(staging, ignore_errors=True)
+    metadata_path = output_dir / "validation_localization_metadata.jsonl"
+    report_path = output_dir / "validation_localization_metadata_report.json"
+    return LocalizationMetadataResult(
+        output_dir=output_dir,
+        report_path=report_path,
+        report_sha256=sha256_file(report_path),
+        metadata_path=metadata_path,
+        metadata_sha256=sha256_file(metadata_path),
+        manifest_path=output_dir / "artifact_manifest.sha256",
+    )
 
 
 def _merge_metadata(rows: Iterable[dict[str, Any]], metadata: dict[tuple[str, str], dict[str, Any]]) -> list[dict[str, Any]]:
