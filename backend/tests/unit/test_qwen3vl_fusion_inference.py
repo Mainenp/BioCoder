@@ -8,8 +8,10 @@ from pathlib import Path
 from multimodal_science.data.manifest import sha256_file
 from multimodal_science.qwen3vl.fusion_inference import (
     _FusionAdapterVerifier,
+    _RLCandidateFusionAdapterVerifier,
     _build_xic_intervention_plan,
     _eos_token_ids,
+    RLCandidateAdapterSpec,
 )
 from multimodal_science.qwen3vl.fusion_training import (
     FUSION_TRAINING_REPORT_SCHEMA,
@@ -140,6 +142,20 @@ class FusionInferenceContractTests(unittest.TestCase):
         self.assertIn("BIOCODER_XIC_INTERVENTION", script)
         self.assertIn('--xic-intervention "$xic_intervention"', script)
 
+    def test_rl_validation_rechecks_open_hash_bound_ledger_before_answers(self) -> None:
+        script = (
+            Path(__file__).parents[2]
+            / "multimodal_science/qwen3vl/slurm/coder_fusion_evaluate.sbatch"
+        ).read_text(encoding="utf-8")
+
+        answer_start = script.index("=== OPEN ANSWERS ONLY AFTER GENERATION IS IMMUTABLE ===")
+        self.assertIn("verify_open_validation_access", script)
+        self.assertIn("Validation requires the exact 16-candidate matrix", script)
+        self.assertIn("RL_VALIDATION_LEDGER=OPEN_AND_HASH_BOUND", script)
+        self.assertIn("verify_rl_validation_access >/dev/null", script[answer_start:])
+        self.assertIn('${rl_candidate_sha:0:12}', script)
+        self.assertIn("QWEN3VL_RL_VALIDATION_EVALUATION=OK", script)
+
     def test_shuffled_xic_is_seeded_deranged_and_asset_stable(self) -> None:
         links = self.intervention_links()
 
@@ -224,6 +240,92 @@ class FusionInferenceContractTests(unittest.TestCase):
             self.assertEqual(metadata["input_modality"], "xic_only")
             self.assertEqual(verifier.verified.report["training"]["vision_forward_calls"], 0)
 
+    def test_rl_candidate_verifier_binds_checkpoint_and_sealed_access(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            starting = _make_fusion_adapter(root / "starting", input_modality="xic_only")
+            pool_sha = "d" * 64
+            checkpoint_root = root / "candidate" / "checkpoints" / "step-00000300"
+            (checkpoint_root / "adapter").mkdir(parents=True)
+            (checkpoint_root / "adapter" / "adapter_config.json").write_text("{}\n", encoding="utf-8")
+            (checkpoint_root / "adapter" / "adapter_model.safetensors").write_text("rl", encoding="utf-8")
+            (checkpoint_root / "sensor_projector.safetensors").write_text("projector", encoding="utf-8")
+            checkpoint_path = checkpoint_root / "checkpoint.json"
+            _write_json(checkpoint_path, {"global_step": 300})
+            checkpoint_files = sorted(
+                path for path in checkpoint_root.rglob("*") if path.is_file()
+            )
+            (checkpoint_root / "artifact_manifest.sha256").write_text(
+                "".join(
+                    f"{sha256_file(path)}  {path.relative_to(checkpoint_root).as_posix()}\n"
+                    for path in checkpoint_files
+                ),
+                encoding="utf-8",
+            )
+            training_root = root / "candidate"
+            training_report = training_root / "fusion_training_report.json"
+            _write_json(
+                training_report,
+                {
+                    "sources": {
+                        "rl_pool_report_sha256": pool_sha,
+                        "starting_adapter_report_sha256": starting.training_report_sha256,
+                        "starting_adapter_manifest_sha256": starting.manifest_sha256,
+                    }
+                },
+            )
+            (training_root / "artifact_manifest.sha256").write_text(
+                f"{sha256_file(training_report)}  fusion_training_report.json\n",
+                encoding="utf-8",
+            )
+            candidate = {
+                "family": "R2",
+                "config": "lora-lr-5e-6-projector-frozen",
+                "checkpoint": {
+                    "step": 300,
+                    "path": str(checkpoint_path),
+                    "sha256": sha256_file(checkpoint_path),
+                },
+                "training_report": {
+                    "path": str(training_report),
+                    "sha256": sha256_file(training_report),
+                },
+                "sources": {
+                    "rl_pool_report_sha256": pool_sha,
+                    "starting_adapter_report_sha256": starting.training_report_sha256,
+                    "starting_adapter_manifest_sha256": starting.manifest_sha256,
+                },
+                "decode": {"strategy": "greedy", "temperature": 0.0, "top_p": 1.0},
+            }
+            candidate_path = root / "candidate.json"
+            _write_json(candidate_path, candidate)
+            verifier = _RLCandidateFusionAdapterVerifier(
+                RLCandidateAdapterSpec(
+                    candidate_path=candidate_path,
+                    candidate_descriptor_sha256=sha256_file(candidate_path),
+                    expected_pool_report_sha256=pool_sha,
+                    selection_result_sha256="e" * 64,
+                    validation_access_id="f" * 24,
+                ),
+                {"mode": "aligned"},
+            )
+
+            adapter_dir, metadata = verifier(
+                starting,
+                model_name_or_path="Qwen/test",
+                model_revision="modelscope-master",
+                model_artifact_sha256="c" * 64,
+            )
+
+            self.assertTrue(adapter_dir.samefile(checkpoint_root / "adapter"))
+            self.assertEqual(metadata["rl_candidate"]["checkpoint_step"], 300)
+            self.assertEqual(metadata["rl_candidate"]["validation_access_id"], "f" * 24)
+            self.assertEqual(metadata["training_report_sha256"], sha256_file(training_report))
+            self.assertEqual(
+                metadata["manifest_sha256"],
+                sha256_file(checkpoint_root / "artifact_manifest.sha256"),
+            )
+
     def test_eos_contract_accepts_scalar_or_sequence(self) -> None:
         self.assertEqual(_eos_token_ids(7), {7})
         self.assertEqual(_eos_token_ids([7, 8]), {7, 8})
@@ -262,6 +364,8 @@ class FusionInferenceContractTests(unittest.TestCase):
         self.assertNotIn("answers", destinations)
         self.assertNotIn("internal_test", destinations)
         self.assertIn("input_modality", destinations)
+        self.assertIn("rl_candidate_json", destinations)
+        self.assertIn("rl_selection_result_sha256", destinations)
 
 
 if __name__ == "__main__":

@@ -7,6 +7,7 @@ import json
 from pathlib import Path
 
 from multimodal_science.qwen3vl.fusion_inference import (
+    RLCandidateAdapterSpec,
     XIC_INTERVENTIONS,
     run_fusion_inference,
 )
@@ -49,11 +50,38 @@ def parser() -> argparse.ArgumentParser:
         choices=("image_xic", "xic_only"),
         default="image_xic",
     )
+    parser.add_argument("--rl-candidate-json", type=Path)
+    parser.add_argument("--rl-candidate-json-sha256")
+    parser.add_argument("--rl-pool-report-sha256")
+    parser.add_argument("--rl-selection-result-sha256")
+    parser.add_argument("--rl-validation-access-id")
     return parser
 
 
 def main() -> None:
     arguments = parser().parse_args()
+    rl_values = (
+        arguments.rl_candidate_json,
+        arguments.rl_candidate_json_sha256,
+        arguments.rl_pool_report_sha256,
+        arguments.rl_selection_result_sha256,
+        arguments.rl_validation_access_id,
+    )
+    if any(value is not None for value in rl_values) and not all(
+        value is not None for value in rl_values
+    ):
+        raise ValueError("All RL validation candidate arguments must be provided together")
+    rl_candidate = (
+        RLCandidateAdapterSpec(
+            candidate_path=arguments.rl_candidate_json,
+            candidate_descriptor_sha256=arguments.rl_candidate_json_sha256,
+            expected_pool_report_sha256=arguments.rl_pool_report_sha256,
+            selection_result_sha256=arguments.rl_selection_result_sha256,
+            validation_access_id=arguments.rl_validation_access_id,
+        )
+        if all(value is not None for value in rl_values)
+        else None
+    )
     result = run_fusion_inference(
         inference_bundle_root=arguments.inference_bundle_root,
         inference_bundle_report_sha256=arguments.inference_bundle_report_sha256,
@@ -87,6 +115,7 @@ def main() -> None:
         xic_intervention=arguments.xic_intervention,
         xic_intervention_seed=arguments.xic_intervention_seed,
         input_modality=arguments.input_modality,
+        rl_candidate=rl_candidate,
     )
     print(
         json.dumps(

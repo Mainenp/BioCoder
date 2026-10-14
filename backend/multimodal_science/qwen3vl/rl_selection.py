@@ -11,6 +11,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import re
 import tempfile
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -516,6 +517,62 @@ def begin_one_time_validation_access(*, selection_root: Path, expected_selection
     access = {"schema_version": SELECTION_ACCESS_SCHEMA, "access_id": hashlib.sha256((expected + "\0selection-validation").encode("utf-8")).hexdigest()[:24], "selection_result_sha256": expected, "opened_at": datetime.now(timezone.utc).isoformat(), "completed": False, "internal_test_accessed": False}
     _write_json(started, access)
     return ValidationAccess(ledger_dir, started, sha256_file(started), str(access["access_id"]), "first_and_only_open", False)
+
+
+def verify_open_validation_access(
+    *,
+    selection_root: Path,
+    expected_selection_result_sha256: str,
+    ledger_dir: Path,
+) -> ValidationAccess:
+    """Verify the already-open validation slot without creating or completing it."""
+
+    selection_root = selection_root.resolve()
+    ledger_dir = ledger_dir.resolve()
+    assert_no_protected_input_paths([selection_root, ledger_dir])
+    expected = _hex(expected_selection_result_sha256, "selection result SHA-256")
+    report_path = selection_root / "rl_selection_result.json"
+    _require(
+        report_path.is_file() and sha256_file(report_path) == expected,
+        "Selection result hash mismatch",
+    )
+    _, manifest_entries = _manifest_entries(selection_root)
+    _require(
+        manifest_entries.get("rl_selection_result.json") == expected,
+        "Selection result is not manifest-bound",
+    )
+    report = _read_json(report_path, "selection result")
+    _require(report.get("schema_version") == SELECTION_RESULT_SCHEMA, "Wrong selection result schema")
+    contracts = _object(report.get("contracts"), "selection result contracts")
+    _require(contracts.get("selection_written_before_validation") is True, "Selection was not sealed")
+    _require(
+        contracts.get("validation_answers_opened") is False
+        and contracts.get("internal_test_accessed") is False,
+        "Selection result protection contract failed",
+    )
+    _require(
+        ledger_dir.name == f"selection-{expected[:12]}",
+        "Validation ledger does not match the sealed selection",
+    )
+    started = ledger_dir / "access_started.json"
+    completed = ledger_dir / "access_completed.json"
+    _require(started.is_file(), "Validation access has not been opened")
+    _require(not completed.exists(), "Validation access is already completed")
+    access = _read_json(started, "validation access")
+    _require(access.get("schema_version") == SELECTION_ACCESS_SCHEMA, "Wrong validation access schema")
+    _require(access.get("selection_result_sha256") == expected, "Validation access selection drift")
+    _require(access.get("completed") is False, "Validation access is not active")
+    _require(access.get("internal_test_accessed") is False, "Validation access references internal test")
+    access_id = access.get("access_id")
+    _require(isinstance(access_id, str) and bool(re.fullmatch(r"[0-9a-f]{24}", access_id)), "Invalid validation access ID")
+    return ValidationAccess(
+        ledger_dir,
+        started,
+        sha256_file(started),
+        access_id,
+        "verified_open_access",
+        False,
+    )
 
 
 def complete_one_time_validation_access(*, access: ValidationAccess, selection_result_sha256: str) -> Path:

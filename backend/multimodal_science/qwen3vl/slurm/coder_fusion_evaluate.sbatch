@@ -73,6 +73,15 @@ bootstrap_iterations="${BIOCODER_BOOTSTRAP_ITERATIONS:-1000}"
 xic_intervention="${BIOCODER_XIC_INTERVENTION:-aligned}"
 xic_intervention_seed="${BIOCODER_XIC_INTERVENTION_SEED:-17}"
 input_modality="${BIOCODER_INPUT_MODALITY:-image_xic}"
+rl_validation_mode=false
+rl_validation_ledger="${BIOCODER_RL_VALIDATION_ACCESS_LEDGER:-}"
+rl_selection_root="${BIOCODER_RL_SELECTION_ROOT:-}"
+rl_selection_result_sha="${BIOCODER_RL_SELECTION_RESULT_SHA256:-}"
+rl_candidate_json="${BIOCODER_RL_CANDIDATE_JSON:-}"
+rl_candidate_sha="${BIOCODER_RL_CANDIDATE_JSON_SHA256:-}"
+rl_candidate_matrix_root="${BIOCODER_RL_CANDIDATE_MATRIX_ROOT:-}"
+rl_candidate_matrix_sha="${BIOCODER_RL_CANDIDATE_MATRIX_REPORT_SHA256:-}"
+rl_pool_report_sha="${BIOCODER_RL_POOL_REPORT_SHA256:-}"
 max_gpu_used_mib="${BIOCODER_MAX_GPU_USED_MIB:-512}"
 max_gpu_utilization="${BIOCODER_MAX_GPU_UTILIZATION:-10}"
 min_local_free_gib="${BIOCODER_MIN_LOCAL_FREE_GIB:-32}"
@@ -100,6 +109,24 @@ esac
   echo "Unsupported BIOCODER_INPUT_MODALITY: $input_modality" >&2
   exit 2
 }
+rl_values=(
+  "$rl_validation_ledger" "$rl_selection_root" "$rl_selection_result_sha"
+  "$rl_candidate_json" "$rl_candidate_sha" "$rl_candidate_matrix_root"
+  "$rl_candidate_matrix_sha" "$rl_pool_report_sha"
+)
+rl_values_present=0
+for value in "${rl_values[@]}"; do [[ -n "$value" ]] && ((rl_values_present += 1)); done
+if (( rl_values_present > 0 )); then
+  (( rl_values_present == ${#rl_values[@]} )) || {
+    echo "All BIOCODER_RL_* validation variables must be provided together" >&2
+    exit 2
+  }
+  [[ "$input_modality" == "xic_only" && "$xic_intervention" == "aligned" ]] || {
+    echo "V2 RL validation requires aligned XIC-only inference" >&2
+    exit 2
+  }
+  rl_validation_mode=true
+fi
 [[ "$seed" == "17" && "$max_new_tokens" == "64" && "$bootstrap_iterations" == "1000" ]] || {
   echo "Formal fusion evaluation is frozen at seed=17, max_new_tokens=64, bootstrap_iterations=1000" >&2
   exit 2
@@ -119,6 +146,18 @@ do
     exit 2
   }
 done
+if [[ "$rl_validation_mode" == true ]]; then
+  for digest in "$rl_selection_result_sha" "$rl_candidate_sha" "$rl_candidate_matrix_sha" "$rl_pool_report_sha"; do
+    [[ "$digest" =~ ^[0-9a-f]{64}$ ]] || {
+      echo "Expected a lowercase RL SHA-256 digest: $digest" >&2
+      exit 2
+    }
+  done
+  test -d "$rl_validation_ledger"
+  test -d "$rl_selection_root"
+  test -f "$rl_candidate_json"
+  test -d "$rl_candidate_matrix_root"
+fi
 [[ "$code_revision" =~ ^[0-9a-f]{40}$ ]]
 test -x "$python_bin"
 test -d "$repo_root/.git"
@@ -138,7 +177,11 @@ actual_revision="$(git -C "$repo_root" rev-parse HEAD)"
 }
 
 modality_slug="${input_modality//_/-}"
-run_name="${modality_slug}-${xic_intervention}-iseed${xic_intervention_seed}-validation-${adapter_short}-${code_short}"
+if [[ "$rl_validation_mode" == true ]]; then
+  run_name="${modality_slug}-${xic_intervention}-iseed${xic_intervention_seed}-validation-${rl_candidate_sha:0:12}-${code_short}"
+else
+  run_name="${modality_slug}-${xic_intervention}-iseed${xic_intervention_seed}-validation-${adapter_short}-${code_short}"
+fi
 generation_root="$run_root/qwen3vl/fusion/generations"
 evaluation_root="$run_root/qwen3vl/fusion/evaluations"
 generation_final="$generation_root/$run_name"
@@ -166,6 +209,7 @@ echo "BOOTSTRAP_ITERATIONS=$bootstrap_iterations"
 echo "XIC_INTERVENTION=$xic_intervention"
 echo "XIC_INTERVENTION_SEED=$xic_intervention_seed"
 echo "INPUT_MODALITY=$input_modality"
+echo "RL_VALIDATION_MODE=$rl_validation_mode"
 echo "GENERATION_ANSWER_KEY_AVAILABLE=false"
 echo "INTERNAL_TEST_ACCESSED=false"
 
@@ -233,6 +277,78 @@ echo "=== STAGE IMMUTABLE CODE ==="
 mkdir -p "$scratch/code"
 git -C "$repo_root" archive "$code_revision" | tar -x -C "$scratch/code"
 export PYTHONPATH="$scratch/code/backend"
+
+verify_rl_validation_access() {
+  [[ "$rl_validation_mode" == true ]] || return 0
+  "$python_bin" - \
+    "$rl_selection_root" "$rl_selection_result_sha" "$rl_validation_ledger" \
+    "$rl_candidate_matrix_root" "$rl_candidate_matrix_sha" \
+    "$rl_candidate_json" "$rl_candidate_sha" "$rl_pool_report_sha" <<'PY'
+import hashlib
+import json
+import pathlib
+import sys
+
+from multimodal_science.qwen3vl.rl_selection import verify_candidate_descriptor, verify_open_validation_access
+
+selection_root = pathlib.Path(sys.argv[1])
+selection_sha = sys.argv[2]
+ledger = pathlib.Path(sys.argv[3])
+matrix_root = pathlib.Path(sys.argv[4]).resolve()
+matrix_sha = sys.argv[5]
+candidate_path = pathlib.Path(sys.argv[6]).resolve()
+candidate_sha = sys.argv[7]
+pool_sha = sys.argv[8]
+
+def digest(path):
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+access = verify_open_validation_access(
+    selection_root=selection_root,
+    expected_selection_result_sha256=selection_sha,
+    ledger_dir=ledger,
+)
+report_path = matrix_root / "candidate_matrix_report.json"
+if digest(report_path) != matrix_sha:
+    raise ValueError("Candidate matrix report drift")
+report = json.loads(report_path.read_text(encoding="utf-8"))
+if report.get("schema_version") != "chrompeak-qwen3vl-rl-selection-candidate-matrix-v1":
+    raise ValueError("Unexpected candidate matrix schema")
+if report.get("sources", {}).get("rl_pool_report_sha256") != pool_sha:
+    raise ValueError("Candidate matrix RL pool drift")
+artifact = report.get("artifacts", {}).get("candidate_list", {})
+candidate_list = (matrix_root / str(artifact.get("path"))).resolve()
+if not candidate_list.is_relative_to(matrix_root) or digest(candidate_list) != artifact.get("sha256"):
+    raise ValueError("Candidate list drift")
+rows = [json.loads(line) for line in candidate_list.read_text(encoding="utf-8").splitlines() if line.strip()]
+if len(rows) != 16 or report.get("counts", {}).get("candidates") != 16:
+    raise ValueError("Validation requires the exact 16-candidate matrix")
+matches = [row for row in rows if row.get("sha256") == candidate_sha]
+if len(matches) != 1:
+    raise ValueError("RL validation candidate is not uniquely matrix-bound")
+listed_path = (matrix_root / str(matches[0].get("path"))).resolve()
+if listed_path != candidate_path or digest(candidate_path) != candidate_sha:
+    raise ValueError("RL validation candidate descriptor drift")
+candidate = json.loads(candidate_path.read_text(encoding="utf-8"))
+bound = verify_candidate_descriptor(candidate, expected_pool_report_sha256=pool_sha)
+if bound.get("candidate_id") != matches[0].get("candidate_id"):
+    raise ValueError("RL validation candidate identity drift")
+print(f"RL_VALIDATION_ACCESS_ID={access.access_id}")
+print(f"RL_VALIDATION_CANDIDATE_ID={bound['candidate_id']}")
+PY
+}
+
+mapfile -t rl_access_contract < <(verify_rl_validation_access)
+if [[ "$rl_validation_mode" == true ]]; then
+  [[ "${#rl_access_contract[@]}" -eq 2 ]] || { echo "RL validation access verification failed" >&2; exit 2; }
+  rl_access_id="${rl_access_contract[0]#RL_VALIDATION_ACCESS_ID=}"
+  rl_candidate_id="${rl_access_contract[1]#RL_VALIDATION_CANDIDATE_ID=}"
+  printf '%s\n' "${rl_access_contract[@]}"
+  echo "RL_VALIDATION_LEDGER=OPEN_AND_HASH_BOUND"
+else
+  rl_access_id=""
+  rl_candidate_id=""
+fi
 
 echo "=== STAGE PROMPT-ONLY VALIDATION INPUTS ==="
 inference_root="$scratch/inference"
@@ -447,6 +563,16 @@ echo "SELECTED_PHYSICAL_GPU=$gpu_index"
 if [[ ! -d "$generation_final" ]]; then
   resume_arguments=()
   [[ -d "$generation_root/.${run_name}.work" ]] && resume_arguments+=(--resume)
+  rl_candidate_arguments=()
+  if [[ "$rl_validation_mode" == true ]]; then
+    rl_candidate_arguments+=(
+      --rl-candidate-json "$rl_candidate_json"
+      --rl-candidate-json-sha256 "$rl_candidate_sha"
+      --rl-pool-report-sha256 "$rl_pool_report_sha"
+      --rl-selection-result-sha256 "$rl_selection_result_sha"
+      --rl-validation-access-id "$rl_access_id"
+    )
+  fi
   echo "=== RUN ANSWER-ISOLATED FUSED GENERATION ==="
   (
     cd "$scratch/code/backend"
@@ -480,6 +606,7 @@ if [[ ! -d "$generation_final" ]]; then
         --xic-intervention "$xic_intervention" \
         --xic-intervention-seed "$xic_intervention_seed" \
         --input-modality "$input_modality" \
+        "${rl_candidate_arguments[@]}" \
         "${resume_arguments[@]}"
   )
 fi
@@ -490,6 +617,7 @@ generation_report_sha256="$(sha256sum "$generation_final/generation_report.json"
 echo "GENERATION_REPORT_SHA256=$generation_report_sha256"
 
 echo "=== OPEN ANSWERS ONLY AFTER GENERATION IS IMMUTABLE ==="
+verify_rl_validation_access >/dev/null
 if [[ ! -d "$evaluation_final" ]]; then
   evaluation_staging="$scratch/evaluation"
   nice -n 10 ionice -c 3 "$python_bin" \
@@ -515,7 +643,9 @@ evaluation_report_sha256="$(sha256sum "$evaluation_final/qwen_evaluation_report.
   "$model_artifact_sha256" "$inference_report_sha256" \
   "$instruction_report_sha256" "$fusion_report_sha256" \
   "$dataset_report_sha256" "$seed" "$max_new_tokens" "$bootstrap_iterations" \
-  "$xic_intervention" "$xic_intervention_seed" "$input_modality" <<'PY'
+  "$xic_intervention" "$xic_intervention_seed" "$input_modality" \
+  "$rl_validation_mode" "$rl_candidate_json" "$rl_candidate_sha" \
+  "$rl_selection_result_sha" "$rl_access_id" <<'PY'
 import hashlib
 import json
 import sys
@@ -533,6 +663,11 @@ seed, max_tokens, bootstrap = map(int, sys.argv[10:13])
 xic_intervention = sys.argv[13]
 xic_intervention_seed = int(sys.argv[14])
 input_modality = sys.argv[15]
+rl_validation_mode = sys.argv[16] == "true"
+rl_candidate_path = Path(sys.argv[17]) if rl_validation_mode else None
+rl_candidate_sha = sys.argv[18]
+rl_selection_sha = sys.argv[19]
+rl_access_id = sys.argv[20]
 
 assert generation["counts"]["predictions"] == 13708
 assert generation["scope"]["complete_prompt_coverage"] is True
@@ -560,8 +695,20 @@ adapter = generation["model"]["adapter"]
 expected_kind = "image_xic_fusion" if input_modality == "image_xic" else "xic_only_qwen"
 assert adapter["kind"] == expected_kind
 assert adapter["input_modality"] == input_modality
-assert adapter["training_report_sha256"] == adapter_report
-assert adapter["manifest_sha256"] == adapter_manifest
+if rl_validation_mode:
+    descriptor = json.loads(rl_candidate_path.read_text(encoding="utf-8"))
+    assert hashlib.sha256(rl_candidate_path.read_bytes()).hexdigest() == rl_candidate_sha
+    assert adapter["training_report_sha256"] == descriptor["training_report"]["sha256"]
+    assert adapter["starting_adapter_training_report_sha256"] == adapter_report
+    assert adapter["starting_adapter_manifest_sha256"] == adapter_manifest
+    rl_candidate = adapter["rl_candidate"]
+    assert rl_candidate["descriptor_sha256"] == rl_candidate_sha
+    assert rl_candidate["selection_result_sha256"] == rl_selection_sha
+    assert rl_candidate["validation_access_id"] == rl_access_id
+    assert rl_candidate["checkpoint_step"] == descriptor["checkpoint"]["step"]
+else:
+    assert adapter["training_report_sha256"] == adapter_report
+    assert adapter["manifest_sha256"] == adapter_manifest
 assert adapter["development_training_complete"] is True
 assert adapter["xic_intervention"] == intervention
 assert generation["model"]["artifact_sha256"] == model_artifact
@@ -595,4 +742,8 @@ if [[ "$input_modality" == "xic_only" ]]; then
   echo "QWEN3VL_XIC_ONLY_EVALUATION=OK"
 else
   echo "QWEN3VL_XIC_FUSION_EVALUATION=OK"
+fi
+if [[ "$rl_validation_mode" == true ]]; then
+  echo "RL_VALIDATION_CANDIDATE_ID=$rl_candidate_id"
+  echo "QWEN3VL_RL_VALIDATION_EVALUATION=OK"
 fi

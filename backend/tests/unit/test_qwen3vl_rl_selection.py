@@ -19,6 +19,7 @@ from multimodal_science.qwen3vl.rl_selection import (
     complete_one_time_validation_access,
     evaluate_selection_predictions,
     seal_selection_result,
+    verify_open_validation_access,
 )
 from multimodal_science.qwen3vl.rl_selection_inference import (
     _adapter_architecture,
@@ -252,7 +253,25 @@ class SelectionTests(unittest.TestCase):
             first = begin_one_time_validation_access(selection_root=sealed.output_dir, expected_selection_result_sha256=sealed.report_sha256, ledger_root=root / "ledger")
             resumed = begin_one_time_validation_access(selection_root=sealed.output_dir, expected_selection_result_sha256=sealed.report_sha256, ledger_root=root / "ledger")
             self.assertEqual(resumed.mode, "exact_selection_crash_resume")
+            verified = verify_open_validation_access(
+                selection_root=sealed.output_dir,
+                expected_selection_result_sha256=sealed.report_sha256,
+                ledger_dir=first.ledger_dir,
+            )
+            self.assertEqual(verified.access_id, first.access_id)
+            with self.assertRaisesRegex(ValueError, "does not match"):
+                verify_open_validation_access(
+                    selection_root=sealed.output_dir,
+                    expected_selection_result_sha256=sealed.report_sha256,
+                    ledger_dir=root / "ledger" / "selection-wrong",
+                )
             complete_one_time_validation_access(access=first, selection_result_sha256=sealed.report_sha256)
+            with self.assertRaisesRegex(ValueError, "already completed"):
+                verify_open_validation_access(
+                    selection_root=sealed.output_dir,
+                    expected_selection_result_sha256=sealed.report_sha256,
+                    ledger_dir=first.ledger_dir,
+                )
             with self.assertRaisesRegex(ValueError, "second run"):
                 begin_one_time_validation_access(selection_root=sealed.output_dir, expected_selection_result_sha256=sealed.report_sha256, ledger_root=root / "ledger")
             with self.assertRaisesRegex(ValueError, "Protected"):

@@ -61,6 +61,17 @@ class _VerifiedFusionAdapter:
 
 
 @dataclass(frozen=True)
+class RLCandidateAdapterSpec:
+    """Hash-bound RL checkpoint selected before the validation gate opened."""
+
+    candidate_path: Path
+    candidate_descriptor_sha256: str
+    expected_pool_report_sha256: str
+    selection_result_sha256: str
+    validation_access_id: str
+
+
+@dataclass(frozen=True)
 class _ValidationInputs:
     links_by_instruction_id: dict[str, dict[str, Any]]
     signals_path: Path
@@ -342,6 +353,92 @@ class _FusionAdapterVerifier:
             report=report,
             metadata=metadata,
             projector_spec=spec,
+        )
+        return self.verified.adapter_dir, dict(metadata)
+
+
+class _RLCandidateFusionAdapterVerifier:
+    """Reuse C0's frozen runtime contract with manifest-bound candidate weights."""
+
+    def __init__(
+        self,
+        candidate: RLCandidateAdapterSpec,
+        xic_intervention: dict[str, Any],
+    ) -> None:
+        self.verified: _VerifiedFusionAdapter | None = None
+        self._candidate = candidate
+        self._base = _FusionAdapterVerifier("xic_only", xic_intervention)
+
+    def __call__(
+        self,
+        specification: AdapterSpec,
+        *,
+        model_name_or_path: str,
+        model_revision: str,
+        model_artifact_sha256: str | None,
+    ) -> tuple[Path, dict[str, Any]]:
+        for digest, label in (
+            (self._candidate.candidate_descriptor_sha256, "candidate descriptor"),
+            (self._candidate.expected_pool_report_sha256, "RL pool report"),
+            (self._candidate.selection_result_sha256, "selection result"),
+        ):
+            _require(bool(_HEX_64.fullmatch(digest)), f"Invalid {label} SHA-256")
+        _require(
+            bool(re.fullmatch(r"[0-9a-f]{24}", self._candidate.validation_access_id)),
+            "Invalid validation access ID",
+        )
+        candidate_path = self._candidate.candidate_path.resolve()
+        _require(candidate_path.is_file(), f"Candidate descriptor not found: {candidate_path}")
+        _require(
+            sha256_file(candidate_path)
+            == self._candidate.candidate_descriptor_sha256,
+            "Candidate descriptor hash mismatch",
+        )
+        self._base(
+            specification,
+            model_name_or_path=model_name_or_path,
+            model_revision=model_revision,
+            model_artifact_sha256=model_artifact_sha256,
+        )
+        _require(self._base.verified is not None, "Starting XIC-only adapter was not verified")
+        from multimodal_science.qwen3vl.rl_selection_inference import (
+            verify_selection_candidate_runtime,
+        )
+
+        candidate = _read_json(candidate_path, "RL candidate descriptor")
+        bound, runtime = verify_selection_candidate_runtime(
+            candidate,
+            expected_pool_report_sha256=self._candidate.expected_pool_report_sha256,
+            starting_adapter=specification,
+        )
+        base = self._base.verified
+        metadata = dict(base.metadata)
+        metadata.update(
+            {
+                "training_report_sha256": runtime.training_report_sha256,
+                "manifest_sha256": runtime.checkpoint_manifest_sha256,
+                "starting_adapter_training_report_sha256": specification.training_report_sha256,
+                "starting_adapter_manifest_sha256": specification.manifest_sha256,
+                "rl_candidate": {
+                    "candidate_id": runtime.candidate_id,
+                    "family": bound["family"],
+                    "config": bound["config"],
+                    "checkpoint_step": bound["checkpoint"]["step"],
+                    "descriptor_sha256": self._candidate.candidate_descriptor_sha256,
+                    "checkpoint_manifest_sha256": runtime.checkpoint_manifest_sha256,
+                    "selection_result_sha256": self._candidate.selection_result_sha256,
+                    "validation_access_id": self._candidate.validation_access_id,
+                },
+            }
+        )
+        self.verified = _VerifiedFusionAdapter(
+            root=base.root,
+            adapter_dir=runtime.adapter_dir,
+            projector_path=runtime.projector_path,
+            processor_dir=base.processor_dir,
+            report=base.report,
+            metadata=metadata,
+            projector_spec=base.projector_spec,
         )
         return self.verified.adapter_dir, dict(metadata)
 
@@ -875,12 +972,22 @@ def run_fusion_inference(
     xic_intervention_seed: int = 17,
     input_modality: str = "image_xic",
     final_benchmark_access: FinalBenchmarkAccessSpec | None = None,
+    rl_candidate: RLCandidateAdapterSpec | None = None,
 ) -> QwenInferenceResult:
     """Generate answer-isolated validation predictions for image/XIC ablations."""
 
     _require(input_modality in FUSION_INPUT_MODALITIES, "Unsupported input modality")
     _require(settings.batch_size == 1, "Fusion inference requires batch_size=1")
     _require(not settings.do_sample, "Fusion development evaluation requires greedy decoding")
+    if rl_candidate is not None:
+        _require(
+            input_modality == "xic_only",
+            "V2 RL candidates require XIC-only validation inference",
+        )
+        _require(
+            final_benchmark_access is None,
+            "V2 RL validation cannot access the v1 internal test",
+        )
     final_access = None
     if final_benchmark_access is not None:
         _require(
@@ -919,7 +1026,14 @@ def run_fusion_inference(
         mode=xic_intervention,
         seed=xic_intervention_seed,
     )
-    verifier = _FusionAdapterVerifier(input_modality, intervention.metadata)
+    verifier: _FusionAdapterVerifier | _RLCandidateFusionAdapterVerifier
+    if rl_candidate is None:
+        verifier = _FusionAdapterVerifier(input_modality, intervention.metadata)
+    else:
+        verifier = _RLCandidateFusionAdapterVerifier(
+            rl_candidate,
+            intervention.metadata,
+        )
 
     def generator_factory(
         runtime_model_name_or_path: str,
