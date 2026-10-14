@@ -365,9 +365,39 @@ class LocalizationAnalysisTests(unittest.TestCase):
         rows = [
             {**base, "instruction_id": "en-positive", "language": "en", "target_peak_present": True},
             {**base, "instruction_id": "zh-negative", "language": "zh-CN", "target_peak_present": False},
+            {**base, "instruction_id": "zh-schema-v2-positive", "language": "zh-CN"},
         ]
-        self.assertEqual([row["instruction_id"] for row in _positive_grounding(rows, "overall")], ["en-positive"])
+        self.assertEqual(
+            [row["instruction_id"] for row in _positive_grounding(rows, "overall")],
+            ["en-positive", "zh-schema-v2-positive"],
+        )
         self.assertEqual([row["instruction_id"] for row in _positive_grounding(rows, "en")], ["en-positive"])
+
+    def test_positive_filter_rejects_ambiguous_grounding_truth(self) -> None:
+        with self.assertRaisesRegex(ValueError, "Expected grounding bbox"):
+            _positive_grounding(
+                [
+                    {
+                        "task": "peak_grounding",
+                        "instruction_id": "missing-truth",
+                        "language": "en",
+                    }
+                ],
+                "overall",
+            )
+        with self.assertRaisesRegex(ValueError, "must be boolean"):
+            _positive_grounding(
+                [
+                    {
+                        "task": "peak_grounding",
+                        "instruction_id": "bad-explicit-truth",
+                        "language": "en",
+                        "target_peak_present": 1,
+                        "expected_bbox_2d": [1.0, 0.0, 2.0, 1.0],
+                    }
+                ],
+                "overall",
+            )
 
     def test_failures_are_deterministic_and_limited(self) -> None:
         baseline = []

@@ -214,12 +214,17 @@ def _positive_grounding(rows: Iterable[dict[str, Any]], scope: str) -> list[dict
         if row.get("task") != "peak_grounding" or (scope != "overall" and row.get("language") != scope):
             continue
         target_present = row.get("target_peak_present")
-        _require(
-            isinstance(target_present, bool),
-            "Grounding record lacks a boolean target_peak_present",
-        )
-        if not target_present:
-            continue
+        if target_present is not None:
+            _require(
+                isinstance(target_present, bool),
+                "Grounding target_peak_present must be boolean when present",
+            )
+            if not target_present:
+                continue
+        # The established evaluator emits grounding prompts only for positive
+        # examples and binds that truth as a required expected bbox.  Older
+        # synthetic records may additionally carry target_peak_present; the
+        # production v2 record schema intentionally does not duplicate it.
         _bbox(row.get("expected_bbox_2d"), "Expected grounding bbox")
         result.append(row)
     _require(result, f"No positive grounding rows for {scope}")
