@@ -36,6 +36,15 @@ SELECTION_INFERENCE_CONFIG_SCHEMA = "chrompeak-qwen3vl-rl-selection-inference-co
 SELECTION_PREDICTION_SCHEMA = "chrompeak-qwen3vl-rl-selection-prediction-v1"
 SELECTION_INFERENCE_REPORT_SCHEMA = "chrompeak-qwen3vl-rl-selection-inference-v1"
 GPU_ALLOCATION_MODE = "manual_physical_index_guard_no_slurm_gres"
+NON_ARCHITECTURAL_ADAPTER_CONFIG_FIELDS = frozenset(
+    {
+        "auto_mapping",
+        "base_model_name_or_path",
+        "inference_mode",
+        "revision",
+        "runtime_config",
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -75,6 +84,40 @@ def _write_jsonl(path: Path, rows: list[dict[str, Any]]) -> None:
             for row in rows
         ),
         encoding="utf-8",
+    )
+
+
+def _adapter_architecture(config: Mapping[str, Any]) -> dict[str, Any]:
+    """Return only fields that affect the loaded LoRA computation graph.
+
+    PEFT rewrites runtime metadata when a named trainable adapter is saved as a
+    standalone inference adapter.  Those fields do not describe the LoRA
+    topology and therefore cannot be compared byte-for-byte with the frozen C0
+    adapter config.  Every remaining field stays protected by the architecture
+    equality check and the complete checkpoint manifest still binds the raw
+    config file.
+    """
+
+    return {
+        key: value
+        for key, value in config.items()
+        if key not in NON_ARCHITECTURAL_ADAPTER_CONFIG_FIELDS
+    }
+
+
+def _require_matching_adapter_architecture(
+    starting_config: Mapping[str, Any], candidate_config: Mapping[str, Any]
+) -> None:
+    starting = _adapter_architecture(starting_config)
+    candidate = _adapter_architecture(candidate_config)
+    differing = sorted(
+        key
+        for key in set(starting) | set(candidate)
+        if starting.get(key) != candidate.get(key)
+    )
+    _require(
+        not differing,
+        "Candidate adapter architecture drift: " + ", ".join(differing),
     )
 
 
@@ -255,7 +298,7 @@ def verify_selection_candidate_runtime(
         checkpoint_root / "adapter" / "adapter_config.json",
         "candidate adapter config",
     )
-    _require(candidate_config == starting_config, "Candidate adapter architecture drift")
+    _require_matching_adapter_architecture(starting_config, candidate_config)
     return bound, VerifiedXicRuntimeWeights(
         adapter_dir=checkpoint_root / "adapter",
         projector_path=checkpoint_root / "sensor_projector.safetensors",

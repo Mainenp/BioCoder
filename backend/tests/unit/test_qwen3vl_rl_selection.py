@@ -21,6 +21,8 @@ from multimodal_science.qwen3vl.rl_selection import (
     seal_selection_result,
 )
 from multimodal_science.qwen3vl.rl_selection_inference import (
+    _adapter_architecture,
+    _require_matching_adapter_architecture,
     load_answer_free_selection_inputs,
     run_selection_inference,
     verify_selection_candidate_runtime,
@@ -127,6 +129,47 @@ def _predictions(bundle: Path, correct: bool = True) -> Path:
 
 
 class SelectionTests(unittest.TestCase):
+    def test_adapter_architecture_ignores_only_peft_runtime_metadata(self) -> None:
+        starting = {
+            "peft_type": "LORA",
+            "task_type": "CAUSAL_LM",
+            "r": 16,
+            "lora_alpha": 32,
+            "target_modules": ["q_proj", "v_proj"],
+            "base_model_name_or_path": "/frozen/model",
+            "revision": "model-revision",
+            "inference_mode": True,
+            "auto_mapping": None,
+            "runtime_config": {"ephemeral_gpu_offload": False},
+        }
+        checkpoint = {
+            **starting,
+            "base_model_name_or_path": "/immutable/staged/model",
+            "revision": None,
+            "inference_mode": False,
+            "auto_mapping": {"base_model_class": "Qwen3VL"},
+            "runtime_config": {"ephemeral_gpu_offload": True},
+        }
+        _require_matching_adapter_architecture(starting, checkpoint)
+        self.assertEqual(
+            _adapter_architecture(starting), _adapter_architecture(checkpoint)
+        )
+
+    def test_adapter_architecture_rejects_real_lora_topology_drift(self) -> None:
+        starting = {
+            "peft_type": "LORA",
+            "r": 16,
+            "target_modules": ["q_proj", "v_proj"],
+            "base_model_name_or_path": "/one/model",
+        }
+        candidate = {
+            **starting,
+            "r": 8,
+            "base_model_name_or_path": "/another/model",
+        }
+        with self.assertRaisesRegex(ValueError, "architecture drift: r"):
+            _require_matching_adapter_architecture(starting, candidate)
+
     def test_bundle_evaluation_and_sealed_selection(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary); pool, pool_sha = _pool(root)
