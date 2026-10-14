@@ -22,6 +22,7 @@ from typing import Any, Iterable
 
 import numpy as np
 
+from multimodal_science.chrompeakformer.multimodal_dataset import DATASET_SCHEMA
 from multimodal_science.data.manifest import sha256_file
 from multimodal_science.qwen3vl.evaluation import (
     BILINGUAL_EVALUATION_RECORD_SCHEMA,
@@ -279,6 +280,25 @@ def _bound_report_artifact(
     return path, descriptor
 
 
+def _assert_development_dataset_scope(report: dict[str, Any]) -> None:
+    """Accept the deployed legacy report only when its contents prove train/validation scope."""
+
+    _require(report.get("schema_version") == DATASET_SCHEMA, "Unsupported Dataset schema")
+    _require(
+        report.get("splits") == ["train", "validation"],
+        "Dataset must contain exactly train and validation splits",
+    )
+    internal_test_accessed = report.get("internal_test_accessed")
+    if internal_test_accessed is not None:
+        _require(internal_test_accessed is False, "Dataset used internal test")
+        return
+    artifacts = _object(report.get("artifacts"), "Dataset artifacts")
+    for name, raw_descriptor in artifacts.items():
+        descriptor = _object(raw_descriptor, f"Dataset artifact {name}")
+        normalized = f"{name}/{descriptor.get('path', '')}".casefold().replace("-", "_")
+        _require("internal_test" not in normalized, "Legacy Dataset report references internal test")
+
+
 def build_localization_metadata(
     *,
     dataset_root: Path,
@@ -310,7 +330,7 @@ def build_localization_metadata(
     )
     dataset = _read_object(dataset_report_path, "Dataset report")
     fusion = _read_object(fusion_report_path, "fusion bundle report")
-    _require(dataset.get("internal_test_accessed") is False, "Dataset used internal test")
+    _assert_development_dataset_scope(dataset)
     _require(fusion.get("internal_test_accessed") is False, "Fusion bundle used internal test")
     validation_examples_path, examples_artifact = _bound_report_artifact(
         dataset_root, dataset, "validation_examples"

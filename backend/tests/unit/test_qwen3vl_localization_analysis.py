@@ -7,6 +7,7 @@ import unittest
 from pathlib import Path
 
 from multimodal_science.data.manifest import sha256_file
+from multimodal_science.chrompeakformer.multimodal_dataset import DATASET_SCHEMA
 from multimodal_science.qwen3vl.evaluation import (
     BILINGUAL_EVALUATION_RECORD_SCHEMA,
     BILINGUAL_EVALUATION_REPORT_SCHEMA,
@@ -141,6 +142,8 @@ def _metadata_sources(root: Path) -> tuple[Path, str, Path, str]:
         encoding="utf-8",
     )
     dataset_report = {
+        "schema_version": DATASET_SCHEMA,
+        "splits": ["train", "validation"],
         "internal_test_accessed": False,
         "artifacts": {
             "validation_examples": {
@@ -247,6 +250,59 @@ class LocalizationAnalysisTests(unittest.TestCase):
                     fusion_bundle_root=fusion,
                     expected_fusion_bundle_report_sha256=sha256_file(fusion_report_path),
                     output_dir=root / "drift",
+                )
+
+    def test_localization_metadata_accepts_only_safe_legacy_dataset_scope(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            dataset, _, fusion, fusion_sha = _metadata_sources(root)
+            report_path = dataset / "dataset_report.json"
+            report = json.loads(report_path.read_text(encoding="utf-8"))
+            del report["internal_test_accessed"]
+            _write_json(report_path, report)
+            result = build_localization_metadata(
+                dataset_root=dataset,
+                expected_dataset_report_sha256=sha256_file(report_path),
+                fusion_bundle_root=fusion,
+                expected_fusion_bundle_report_sha256=fusion_sha,
+                output_dir=root / "legacy-safe",
+            )
+            self.assertTrue(result.metadata_path.is_file())
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            dataset, _, fusion, fusion_sha = _metadata_sources(root)
+            report_path = dataset / "dataset_report.json"
+            report = json.loads(report_path.read_text(encoding="utf-8"))
+            report["internal_test_accessed"] = True
+            _write_json(report_path, report)
+            with self.assertRaisesRegex(ValueError, "Dataset used internal test"):
+                build_localization_metadata(
+                    dataset_root=dataset,
+                    expected_dataset_report_sha256=sha256_file(report_path),
+                    fusion_bundle_root=fusion,
+                    expected_fusion_bundle_report_sha256=fusion_sha,
+                    output_dir=root / "explicit-protected",
+                )
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            dataset, _, fusion, fusion_sha = _metadata_sources(root)
+            report_path = dataset / "dataset_report.json"
+            report = json.loads(report_path.read_text(encoding="utf-8"))
+            del report["internal_test_accessed"]
+            report["artifacts"]["protected"] = {
+                "path": "internal-test/examples.jsonl",
+                "sha256": "0" * 64,
+            }
+            _write_json(report_path, report)
+            with self.assertRaisesRegex(ValueError, "Legacy Dataset report references internal test"):
+                build_localization_metadata(
+                    dataset_root=dataset,
+                    expected_dataset_report_sha256=sha256_file(report_path),
+                    fusion_bundle_root=fusion,
+                    expected_fusion_bundle_report_sha256=fusion_sha,
+                    output_dir=root / "legacy-protected",
                 )
 
     def test_fixed_tertiles_are_shared_and_ties_are_low(self) -> None:
