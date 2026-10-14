@@ -49,7 +49,9 @@ def _task_metrics() -> dict:
     }
 
 
-def _rows(label: str, *, drift: str | None = None) -> list[dict]:
+def _rows(
+    label: str, *, drift: str | None = None, grounding_groups: int = 11
+) -> list[dict]:
     rows: list[dict] = []
     for group in range(11):
         for language in ("en", "zh-CN"):
@@ -57,6 +59,8 @@ def _rows(label: str, *, drift: str | None = None) -> list[dict]:
             for task in ("peak_presence", "peak_presence_metadata"):
                 rows.append({"schema_version": BILINGUAL_EVALUATION_RECORD_SCHEMA, "instruction_id": f"{asset}-{language}-{task}", "pair_id": f"{asset}-{task}", "asset_id": asset, "group_id": f"group-{group}", "task": task, "language": language, "target_peak_present": True, "predicted_peak_present": True, "classification_score": 1.0, "schema_valid": True, "exact_match": True})
             rows.append({"schema_version": BILINGUAL_EVALUATION_RECORD_SCHEMA, "instruction_id": f"{asset}-{language}-scientific_qc", "pair_id": f"{asset}-scientific_qc", "asset_id": asset, "group_id": f"group-{group}", "task": "scientific_qc", "language": language, "schema_valid": True, "exact_match": True, "predicted_qc_state": "pass", "predicted_reason": "ok"})
+            if group >= grounding_groups:
+                continue
             expected = [10.0 + group * 10.0, 0.0, 20.0 + group * 10.0, 20.0]
             if label == "c0":
                 predicted = [0.0, 0.0, 5.0, 20.0]
@@ -71,10 +75,16 @@ def _rows(label: str, *, drift: str | None = None) -> list[dict]:
     return rows
 
 
-def _run(root: Path, label: str, *, drift: str | None = None) -> Path:
+def _run(
+    root: Path,
+    label: str,
+    *,
+    drift: str | None = None,
+    grounding_groups: int = 11,
+) -> Path:
     directory = root / label
     directory.mkdir()
-    rows = _rows(label, drift=drift)
+    rows = _rows(label, drift=drift, grounding_groups=grounding_groups)
     records = directory / "evaluation_records.jsonl"
     records.write_text("".join(json.dumps(row, sort_keys=True) + "\n" for row in rows), encoding="utf-8")
     report = {
@@ -93,9 +103,9 @@ def _run(root: Path, label: str, *, drift: str | None = None) -> Path:
     return directory
 
 
-def _metadata(path: Path) -> str:
+def _metadata(path: Path, *, grounding_groups: int = 11) -> str:
     rows = []
-    for group in range(11):
+    for group in range(grounding_groups):
         rows.append({"task": "peak_grounding", "pair_id": f"asset-{group}-peak_grounding", "asset_id": f"asset-{group}", "group_id": f"group-{group}", "raw_max": 10.0 * (group + 1), "roi_window_minutes": [1.0, 3.0]})
     path.write_text("".join(json.dumps(row, sort_keys=True) + "\n" for row in rows), encoding="utf-8")
     return sha256_file(path)
@@ -382,6 +392,30 @@ class LocalizationAnalysisTests(unittest.TestCase):
             self.assertLessEqual(report["failure_cases"]["records"], 20)
             self.assertFalse(report["internal_test_accessed"])
             self.assertIn("localization_failure_cases.jsonl", result.manifest_path.read_text(encoding="utf-8"))
+
+    def test_analysis_uses_hash_bound_grounding_group_support(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            metadata = root / "metadata.jsonl"
+            digest = _metadata(metadata, grounding_groups=10)
+            result = analyze_localization(
+                c0_evaluation_root=_run(root, "c0", grounding_groups=10),
+                c1_evaluation_root=_run(root, "c1", grounding_groups=10),
+                rl_evaluation_root=_run(root, "rl", grounding_groups=10),
+                validation_metadata_path=metadata,
+                expected_validation_metadata_sha256=digest,
+                output_dir=root / "analysis",
+            )
+            report = json.loads(result.report_path.read_text(encoding="utf-8"))
+            self.assertEqual(report["validation_metadata"]["grounding_source_groups"], 10)
+            for comparison in ("rl_minus_c0", "rl_minus_c1"):
+                for scope in ("overall", "en", "zh-CN"):
+                    self.assertEqual(
+                        report["paired_group_bootstrap"]["comparisons"][comparison][scope][
+                            "source_groups"
+                        ],
+                        10,
+                    )
 
     def test_rejects_metadata_hash_and_identity_drift(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

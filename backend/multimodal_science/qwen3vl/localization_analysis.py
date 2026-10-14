@@ -710,6 +710,15 @@ def analyze_localization(
     _require(identities["c0"] == identities["c1"] == identities["rl"], "Evaluation record identity drift")
     metadata_sha = sha256_file(_assert_development_path(validation_metadata_path, "validation metadata"))
     metadata = _metadata_index(_metadata_rows(validation_metadata_path, expected_validation_metadata_sha256))
+    expected_grounding_groups = {
+        str(row["group_id"])
+        for row in metadata.values()
+        if row.get("task") == "peak_grounding"
+    }
+    _require(
+        2 <= len(expected_grounding_groups) <= VALIDATION_SOURCE_GROUPS,
+        "Validation metadata has an invalid grounding source-group count",
+    )
     merged = {label: _merge_metadata(_positive_grounding(run.records, "overall"), metadata) for label, run in loaded.items()}
     base_identity = sorted((row["instruction_id"], row["raw_max"], tuple(row["roi_window_minutes"] or ())) for row in merged["c0"])
     for label in ("c1", "rl"):
@@ -718,10 +727,10 @@ def analyze_localization(
     by_scope = {label: {scope: [row for row in merged[label] if scope == "overall" or row["language"] == scope] for scope in SCOPES} for label in MODELS}
     for label, scopes in by_scope.items():
         for scope, rows in scopes.items():
+            actual_groups = {str(row["group_id"]) for row in rows}
             _require(
-                len({str(row["group_id"]) for row in rows})
-                == VALIDATION_SOURCE_GROUPS,
-                f"{label}/{scope} must contain exactly {VALIDATION_SOURCE_GROUPS} validation source groups",
+                actual_groups == expected_grounding_groups,
+                f"{label}/{scope} grounding source groups disagree with validation metadata",
             )
     localization = {label: {scope: _localization_metrics(rows) for scope, rows in scopes.items()} for label, scopes in by_scope.items()}
     strata = {label: {scope: _stratified_metrics(rows, boundaries) for scope, rows in scopes.items()} for label, scopes in by_scope.items()}
@@ -732,7 +741,12 @@ def analyze_localization(
         "evaluation_scope": "development_validation", "development_comparison_eligible": True,
         "final_benchmark_eligible": False, "internal_test_accessed": False,
         "sources": {label: {"evaluation_root": str(run.root), "evaluation_report_sha256": run.report_sha256, "evaluation_manifest_sha256": run.manifest_sha256, "evaluation_records_sha256": run.records_sha256} for label, run in loaded.items()},
-        "validation_metadata": {"path": str(validation_metadata_path.resolve()), "sha256": metadata_sha, "expected_sha256": expected_validation_metadata_sha256},
+        "validation_metadata": {
+            "path": str(validation_metadata_path.resolve()),
+            "sha256": metadata_sha,
+            "expected_sha256": expected_validation_metadata_sha256,
+            "grounding_source_groups": len(expected_grounding_groups),
+        },
         "localization": localization, "constraints": {label: {scope: _constraint_metrics(run.report, run.records, scope) for scope in SCOPES} for label, run in loaded.items()},
         "cross_language_consistency": {label: _cross_language_consistency(list(run.records)) for label, run in loaded.items()},
         "stratification": {"boundaries": boundaries, "metrics": strata},
