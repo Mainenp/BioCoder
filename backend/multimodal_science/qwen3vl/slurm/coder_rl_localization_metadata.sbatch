@@ -80,7 +80,8 @@ report = json.loads(
     (root / "validation_localization_metadata_report.json").read_text(encoding="utf-8")
 )
 assert report["schema_version"] == "chrompeak-qwen3vl-v2-localization-metadata-report-v1"
-assert report["counts"]["source_groups"] == 11
+assert report["counts"]["validation_source_groups"] == 11
+assert report["counts"]["grounding_source_groups"] >= 2
 assert report["contracts"]["answer_free"] is True
 assert report["contracts"]["validation_answers_opened"] is False
 assert report["contracts"]["internal_test_accessed"] is False

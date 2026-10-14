@@ -344,6 +344,17 @@ def build_localization_metadata(
     _require(links_artifact.get("records") == len(links), "Validation link count drift")
     examples_by_asset = {str(row.get("asset_id")): row for row in examples}
     _require(len(examples_by_asset) == len(examples), "Duplicate validation asset ID")
+    validation_groups = {str(row.get("group_id") or "") for row in examples}
+    link_groups = {str(row.get("group_id") or "") for row in links}
+    _require(
+        "" not in validation_groups
+        and len(validation_groups) == VALIDATION_SOURCE_GROUPS,
+        "Validation examples must cover all source groups",
+    )
+    _require(
+        link_groups == validation_groups,
+        "Validation links do not cover the frozen validation source groups",
+    )
     rows_by_pair: dict[str, dict[str, Any]] = {}
     for link in links:
         if link.get("task") != "peak_grounding":
@@ -360,6 +371,10 @@ def build_localization_metadata(
         _require(
             isinstance(group_id, str) and bool(group_id),
             "Grounding link lacks a source group",
+        )
+        _require(
+            group_id == example.get("group_id"),
+            "Grounding link/example source-group drift",
         )
         roi = metadata.get("roi_window_minutes")
         _require(
@@ -381,10 +396,9 @@ def build_localization_metadata(
         _require(previous == row, f"Bilingual localization metadata drift: {pair_id}")
     rows = [rows_by_pair[key] for key in sorted(rows_by_pair)]
     _require(rows, "No grounding localization metadata was produced")
-    _require(
-        len({row["group_id"] for row in rows}) == VALIDATION_SOURCE_GROUPS,
-        "Localization metadata must cover all validation source groups",
-    )
+    grounding_groups = {str(row["group_id"]) for row in rows}
+    _require(grounding_groups <= validation_groups, "Unknown grounding source group")
+    _require(len(grounding_groups) >= 2, "Grounding metadata has insufficient source groups")
 
     output_dir.parent.mkdir(parents=True, exist_ok=True)
     staging = output_dir.parent / f".{output_dir.name}-{uuid.uuid4().hex}.staging"
@@ -406,7 +420,8 @@ def build_localization_metadata(
             },
             "counts": {
                 "records": len(rows),
-                "source_groups": len({row["group_id"] for row in rows}),
+                "validation_source_groups": len(validation_groups),
+                "grounding_source_groups": len(grounding_groups),
             },
             "contracts": {
                 "answer_free": True,

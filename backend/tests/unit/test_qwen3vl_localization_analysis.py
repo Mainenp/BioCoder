@@ -209,7 +209,14 @@ class LocalizationAnalysisTests(unittest.TestCase):
                 for line in result.metadata_path.read_text(encoding="utf-8").splitlines()
             ]
             self.assertEqual(report["schema_version"], METADATA_REPORT_SCHEMA)
-            self.assertEqual(report["counts"], {"records": 11, "source_groups": 11})
+            self.assertEqual(
+                report["counts"],
+                {
+                    "records": 11,
+                    "validation_source_groups": 11,
+                    "grounding_source_groups": 11,
+                },
+            )
             self.assertEqual(report["contracts"]["validation_answers_opened"], False)
             self.assertEqual(report["contracts"]["internal_test_accessed"], False)
             self.assertEqual(len(rows), 11)
@@ -234,7 +241,8 @@ class LocalizationAnalysisTests(unittest.TestCase):
                 )
             links_path = fusion / "validation_xic_links.jsonl"
             links = [json.loads(line) for line in links_path.read_text(encoding="utf-8").splitlines()]
-            links[1]["group_id"] = "drifted-group"
+            links[1]["asset_id"] = "asset-1"
+            links[1]["group_id"] = "group-1"
             links_path.write_text(
                 "".join(json.dumps(row, sort_keys=True) + "\n" for row in links),
                 encoding="utf-8",
@@ -251,6 +259,35 @@ class LocalizationAnalysisTests(unittest.TestCase):
                     expected_fusion_bundle_report_sha256=sha256_file(fusion_report_path),
                     output_dir=root / "drift",
                 )
+
+    def test_localization_metadata_allows_grounding_to_cover_a_strict_group_subset(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            dataset, dataset_sha, fusion, _ = _metadata_sources(root)
+            links_path = fusion / "validation_xic_links.jsonl"
+            links = [json.loads(line) for line in links_path.read_text(encoding="utf-8").splitlines()]
+            for link in links:
+                if link["group_id"] == "group-10":
+                    link["task"] = "peak_presence"
+                    link["pair_id"] = "asset-10-peak_presence"
+            links_path.write_text(
+                "".join(json.dumps(row, sort_keys=True) + "\n" for row in links),
+                encoding="utf-8",
+            )
+            fusion_report_path = fusion / "fusion_bundle_report.json"
+            fusion_report = json.loads(fusion_report_path.read_text(encoding="utf-8"))
+            fusion_report["artifacts"]["validation_xic_links"]["sha256"] = sha256_file(links_path)
+            _write_json(fusion_report_path, fusion_report)
+            result = build_localization_metadata(
+                dataset_root=dataset,
+                expected_dataset_report_sha256=dataset_sha,
+                fusion_bundle_root=fusion,
+                expected_fusion_bundle_report_sha256=sha256_file(fusion_report_path),
+                output_dir=root / "grounding-subset",
+            )
+            report = json.loads(result.report_path.read_text(encoding="utf-8"))
+            self.assertEqual(report["counts"]["validation_source_groups"], 11)
+            self.assertEqual(report["counts"]["grounding_source_groups"], 10)
 
     def test_localization_metadata_accepts_only_safe_legacy_dataset_scope(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
