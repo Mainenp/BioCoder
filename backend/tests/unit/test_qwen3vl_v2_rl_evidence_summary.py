@@ -248,7 +248,8 @@ class V2RLEvidenceSummaryTests(unittest.TestCase):
             )
             _manifest(evaluation_root, "qwen_evaluation_report.json")
             (slurm_root / f"job-{index}.out").write_text(
-                f"CANDIDATE_ID={candidate}\nPERSISTENT_EVALUATION={evaluation_root}\n",
+                f"RL_VALIDATION_CANDIDATE_ID={candidate}\n"
+                f"PERSISTENT_EVALUATION={evaluation_root}\n",
                 encoding="utf-8",
             )
         return analysis_root, run_root, slurm_root

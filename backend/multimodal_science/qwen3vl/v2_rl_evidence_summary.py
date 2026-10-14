@@ -16,7 +16,9 @@ from typing import Any, Iterable
 
 
 _HEX_64 = re.compile(r"[0-9a-f]{64}")
-_CANDIDATE = re.compile(r"^CANDIDATE_ID=(.+)$", re.MULTILINE)
+_CANDIDATE = re.compile(
+    r"^(?:RL_VALIDATION_CANDIDATE_ID|CANDIDATE_ID)=(.+)$", re.MULTILINE
+)
 _EVALUATION = re.compile(r"^PERSISTENT_EVALUATION=(.+)$", re.MULTILINE)
 _MODELS = ("c0", "c1", "rl")
 _SCOPES = ("overall", "en", "zh-CN")
