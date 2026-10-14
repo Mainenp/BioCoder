@@ -45,6 +45,7 @@ NON_ARCHITECTURAL_ADAPTER_CONFIG_FIELDS = frozenset(
         "runtime_config",
     }
 )
+ORDER_INSENSITIVE_ADAPTER_CONFIG_FIELDS = frozenset({"target_modules"})
 
 
 @dataclass(frozen=True)
@@ -98,11 +99,18 @@ def _adapter_architecture(config: Mapping[str, Any]) -> dict[str, Any]:
     config file.
     """
 
-    return {
-        key: value
-        for key, value in config.items()
-        if key not in NON_ARCHITECTURAL_ADAPTER_CONFIG_FIELDS
-    }
+    architecture: dict[str, Any] = {}
+    for key, value in config.items():
+        if key in NON_ARCHITECTURAL_ADAPTER_CONFIG_FIELDS:
+            continue
+        if (
+            key in ORDER_INSENSITIVE_ADAPTER_CONFIG_FIELDS
+            and isinstance(value, list)
+            and all(isinstance(item, str) for item in value)
+        ):
+            value = sorted(value)
+        architecture[key] = value
+    return architecture
 
 
 def _require_matching_adapter_architecture(

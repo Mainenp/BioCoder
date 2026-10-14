@@ -170,6 +170,34 @@ class SelectionTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "architecture drift: r"):
             _require_matching_adapter_architecture(starting, candidate)
 
+    def test_adapter_architecture_treats_target_modules_as_a_set(self) -> None:
+        starting = {
+            "peft_type": "LORA",
+            "r": 16,
+            "target_modules": ["q_proj", "k_proj", "v_proj"],
+        }
+        reordered = {
+            **starting,
+            "target_modules": ["v_proj", "q_proj", "k_proj"],
+        }
+        _require_matching_adapter_architecture(starting, reordered)
+        self.assertEqual(
+            _adapter_architecture(starting), _adapter_architecture(reordered)
+        )
+
+    def test_adapter_architecture_rejects_target_module_membership_drift(self) -> None:
+        starting = {
+            "peft_type": "LORA",
+            "r": 16,
+            "target_modules": ["q_proj", "k_proj", "v_proj"],
+        }
+        candidate = {
+            **starting,
+            "target_modules": ["q_proj", "k_proj", "o_proj"],
+        }
+        with self.assertRaisesRegex(ValueError, "architecture drift: target_modules"):
+            _require_matching_adapter_architecture(starting, candidate)
+
     def test_bundle_evaluation_and_sealed_selection(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary); pool, pool_sha = _pool(root)
