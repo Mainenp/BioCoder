@@ -187,8 +187,13 @@ class V2RLEvidenceSummaryTests(unittest.TestCase):
 
         training = run_root / "qwen3vl" / "rl" / "runs"
         for name in ("R1", "R2", "R3", "c1-original", "c1-1e-6"):
+            report_name = (
+                "sft_continue_training_report.json"
+                if name.startswith("c1-")
+                else "fusion_training_report.json"
+            )
             _write_json(
-                training / f"v2-{name}-formal-seed17-revision" / "fusion_training_report.json",
+                training / f"v2-{name}-formal-seed17-revision" / report_name,
                 {
                     "schema_version": "training-v1",
                     "runtime": {

@@ -187,7 +187,7 @@ def _hypotheses(report: dict[str, Any]) -> dict[str, Any]:
 def _training_summaries(run_root: Path) -> list[dict[str, Any]]:
     reports = sorted(
         (run_root / "qwen3vl" / "rl" / "runs").glob(
-            "v2-*-formal-seed17-*/fusion_training_report.json"
+            "v2-*-formal-seed17-*/*training_report.json"
         )
     )
     _require(len(reports) == 5, f"Expected five formal training reports, found {len(reports)}")
