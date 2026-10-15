@@ -1,0 +1,302 @@
+from __future__ import annotations
+
+import importlib.util
+import json
+import tempfile
+import unittest
+from pathlib import Path
+
+from multimodal_science.data.manifest import sha256_file
+from multimodal_science.qwen3vl.fusion_data import (
+    FUSION_BUNDLE_SCHEMA,
+    LEGACY_FUSION_BUNDLE_SCHEMA,
+)
+from multimodal_science.qwen3vl.fusion_smoke import (
+    REQUIRED_RUNTIME_PACKAGES,
+    _bind_adapter_training_rows,
+    _bind_fusion_lora_artifacts,
+    _bounded_training_rows,
+    _verify_model_manifest,
+    _verify_mrope_insertion,
+)
+from multimodal_science.qwen3vl.inference import AdapterSpec
+from multimodal_science.qwen3vl.sensor_fusion import insert_sensor_embeddings
+
+
+class SensorFusionTests(unittest.TestCase):
+    def test_runtime_contract_matches_the_deployed_qwen_environment(self) -> None:
+        self.assertEqual(
+            REQUIRED_RUNTIME_PACKAGES,
+            {
+                "numpy": "1.26.4",
+                "torch": "2.11.0+cu128",
+                "transformers": "4.57.1",
+                "peft": "0.17.1",
+                "safetensors": "0.6.2",
+            },
+        )
+
+    def test_initial_adapter_is_bound_to_exact_fusion_training_rows(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            train_rows = root / "train_qwen.jsonl"
+            train_rows.write_text('{"instruction_id":"one"}\n', encoding="utf-8")
+            report_path = root / "lora_training_report.json"
+            report = {
+                "schema_version": "chrompeak-qwen3vl-lora-training-v1",
+                "source": {"train_rows_sha256": sha256_file(train_rows)},
+            }
+            report_path.write_text(json.dumps(report) + "\n", encoding="utf-8")
+            adapter = AdapterSpec(
+                root=root,
+                training_report_sha256=sha256_file(report_path),
+                manifest_sha256="0" * 64,
+            )
+
+            self.assertEqual(
+                _bind_adapter_training_rows(adapter, train_rows),
+                sha256_file(train_rows),
+            )
+
+            stale_report_specification = adapter
+            report["source"]["train_rows_sha256"] = "0" * 64
+            report_path.write_text(json.dumps(report) + "\n", encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "training report hash mismatch"):
+                _bind_adapter_training_rows(stale_report_specification, train_rows)
+
+            adapter = AdapterSpec(
+                root=root,
+                training_report_sha256=sha256_file(report_path),
+                manifest_sha256="0" * 64,
+            )
+            with self.assertRaisesRegex(ValueError, "do not match"):
+                _bind_adapter_training_rows(adapter, train_rows)
+
+    def test_fusion_accepts_rebuilt_lora_report_only_when_content_is_identical(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            train_rows = root / "train_qwen.jsonl"
+            selection = root / "selection_manifest.jsonl"
+            train_rows.write_text('{"image":"roi.jpeg"}\n', encoding="utf-8")
+            selection.write_text('{"instruction_id":"one"}\n', encoding="utf-8")
+            fusion_report = {
+                "schema_version": FUSION_BUNDLE_SCHEMA,
+                "sources": {
+                    "lora_bundle_report_sha256": "1" * 64,
+                    "lora_train_qwen_sha256": sha256_file(train_rows),
+                    "lora_selection_manifest_sha256": sha256_file(selection),
+                },
+            }
+
+            binding = _bind_fusion_lora_artifacts(
+                fusion_report,
+                "2" * 64,
+                train_rows,
+                selection,
+            )
+
+            self.assertEqual(binding["mode"], "training_artifact_sha256")
+            self.assertFalse(binding["bundle_report_sha256_match"])
+            self.assertEqual(binding["train_qwen_sha256"], sha256_file(train_rows))
+            self.assertEqual(
+                binding["selection_manifest_sha256"],
+                sha256_file(selection),
+            )
+
+            train_rows.write_text('{"image":"changed.jpeg"}\n', encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "train-row content drift"):
+                _bind_fusion_lora_artifacts(
+                    fusion_report,
+                    "2" * 64,
+                    train_rows,
+                    selection,
+                )
+
+            train_rows.write_text('{"image":"roi.jpeg"}\n', encoding="utf-8")
+            selection.write_text('{"instruction_id":"changed"}\n', encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "selection content drift"):
+                _bind_fusion_lora_artifacts(
+                    fusion_report,
+                    "2" * 64,
+                    train_rows,
+                    selection,
+                )
+
+    def test_legacy_fusion_bundle_keeps_exact_report_identity_guard(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            train_rows = root / "train_qwen.jsonl"
+            selection = root / "selection_manifest.jsonl"
+            train_rows.write_text("{}\n", encoding="utf-8")
+            selection.write_text("{}\n", encoding="utf-8")
+            fusion_report = {
+                "schema_version": LEGACY_FUSION_BUNDLE_SCHEMA,
+                "sources": {"lora_bundle_report_sha256": "1" * 64},
+            }
+
+            with self.assertRaisesRegex(ValueError, "legacy fusion bundle"):
+                _bind_fusion_lora_artifacts(
+                    fusion_report,
+                    "2" * 64,
+                    train_rows,
+                    selection,
+                )
+
+            binding = _bind_fusion_lora_artifacts(
+                fusion_report,
+                "1" * 64,
+                train_rows,
+                selection,
+            )
+            self.assertEqual(binding["mode"], "legacy_report_sha256")
+            self.assertTrue(binding["bundle_report_sha256_match"])
+
+    def test_bounded_training_rows_rejects_fewer_rows_than_updates(self) -> None:
+        with self.assertRaisesRegex(ValueError, "Requested 2 updates"):
+            _bounded_training_rows([{"row": 1}], 2)
+        self.assertEqual(_bounded_training_rows([1, 2, 3], 2), [1, 2])
+
+    def test_model_manifest_binds_every_local_model_file(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            model = root / "model"
+            model.mkdir()
+            (model / "config.json").write_text("{}\n", encoding="utf-8")
+            (model / "model.safetensors").write_bytes(b"weights")
+            manifest = root / "model.files.sha256"
+            manifest.write_text(
+                "".join(
+                    f"{sha256_file(path)}  /source/cache/{path.name}\n"
+                    for path in sorted(model.iterdir())
+                ),
+                encoding="utf-8",
+            )
+
+            inventory = _verify_model_manifest(model, manifest, sha256_file(manifest))
+
+            self.assertEqual(inventory["files"], 2)
+            (model / "model.safetensors").write_bytes(b"tampered")
+            with self.assertRaisesRegex(ValueError, "Model file hash mismatch"):
+                _verify_model_manifest(model, manifest, sha256_file(manifest))
+
+            (model / "model.safetensors").write_bytes(b"weights")
+            (model / "unlisted.json").write_text("{}\n", encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "does not cover"):
+                _verify_model_manifest(model, manifest, sha256_file(manifest))
+
+    def test_insertion_preserves_vocabulary_and_masks_sensor_targets(self) -> None:
+        if importlib.util.find_spec("torch") is None:
+            self.skipTest("PyTorch is verified in the server training environment")
+        import torch
+
+        class Model:
+            @staticmethod
+            def get_input_embeddings():
+                return torch.nn.Embedding.from_pretrained(
+                    torch.arange(40, dtype=torch.float32).reshape(10, 4)
+                )
+
+        model = Model()
+        input_ids = torch.tensor([[1, 2, 3, 4]])
+        labels = torch.tensor([[-100, -100, 3, 4]])
+        sensors = torch.tensor([[[101.0] * 4, [102.0] * 4]])
+        fused, targets, attention, shadow_ids = insert_sensor_embeddings(
+            model, input_ids, labels, sensors, [2]
+        )
+
+        original = model.get_input_embeddings()(input_ids)
+        self.assertEqual(tuple(fused.shape), (1, 6, 4))
+        self.assertTrue(torch.equal(fused[0, :2], original[0, :2]))
+        self.assertTrue(torch.equal(fused[0, 2:4], sensors[0]))
+        self.assertTrue(torch.equal(fused[0, 4:], original[0, 2:]))
+        self.assertEqual(targets.tolist(), [[-100, -100, -100, -100, 3, 4]])
+        self.assertEqual(attention.tolist(), [[1, 1, 1, 1, 1, 1]])
+        self.assertEqual(shadow_ids.tolist(), [[1, 2, 0, 0, 3, 4]])
+        self.assertEqual(model.get_input_embeddings().num_embeddings, 10)
+
+    def test_mrope_insertion_preserves_prefix_and_shifts_text_suffix(self) -> None:
+        if importlib.util.find_spec("torch") is None:
+            self.skipTest("PyTorch is verified in the server training environment")
+        import torch
+
+        original = torch.tensor(
+            [
+                [[0, 1, 2, 8, 9]],
+                [[0, 1, 4, 8, 9]],
+                [[0, 1, 6, 8, 9]],
+            ]
+        )
+        inserted = torch.tensor([8, 9, 10, 11])
+        fused = torch.cat(
+            (
+                original[:, :, :3],
+                inserted.view(1, 1, -1).expand(3, 1, -1),
+                original[:, :, 3:] + 4,
+            ),
+            dim=2,
+        )
+
+        evidence = _verify_mrope_insertion(
+            original,
+            fused,
+            boundary=3,
+            sensor_tokens=4,
+        )
+
+        self.assertEqual(evidence["axes"], 3)
+        self.assertEqual(evidence["fused_length"], 9)
+
+    def test_smoke_cli_has_no_validation_answer_or_internal_test_surface(self) -> None:
+        from multimodal_science.qwen3vl.run_fusion_smoke_cli import parser
+
+        destinations = {action.dest for action in parser()._actions}
+        self.assertNotIn("validation_answers", destinations)
+        self.assertNotIn("internal_test", destinations)
+
+    def test_slurm_smoke_is_guarded_bounded_and_named_coder(self) -> None:
+        script = (
+            Path(__file__).parents[2]
+            / "multimodal_science"
+            / "qwen3vl"
+            / "slurm"
+            / "coder_fusion_smoke.sbatch"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("#SBATCH --job-name=coder", script)
+        self.assertIn("--max-records 8", script)
+        self.assertIn("--max-steps 2", script)
+        self.assertIn("--seed 17", script)
+        self.assertIn("GPU failed startup guard", script)
+        self.assertIn("status --porcelain --untracked-files=all", script)
+        self.assertIn('archive "$code_revision"', script)
+        self.assertIn("BIOCODER_MODEL_MANIFEST_PATH", script)
+        self.assertIn("BIOCODER_MODEL_MANIFEST_SHA256", script)
+        self.assertIn("manual_physical_index_guard_no_slurm_gres", script)
+        self.assertIn("BIOCODER_TRAIN_INPUT_SCOPE", script)
+        self.assertIn("staged_train_artifacts_only", script)
+        self.assertIn("BIOCODER_VERIFIED_CODE_REVISION", script)
+        self.assertIn("initial_adapter_training_rows_bound", script)
+        self.assertIn("fusion_lora_training_artifacts_bound", script)
+        self.assertIn("fusion_lora_content_binding", script)
+        self.assertIn("training_artifact_sha256", script)
+        self.assertIn("CUBLAS_WORKSPACE_CONFIG=:4096:8", script)
+        self.assertIn('cd "$scratch/code/backend"', script)
+        self.assertIn("env -i", script)
+        self.assertIn("PYTHONNOUSERSITE=1", script)
+        self.assertIn('for variable in "${!BIOCODER_@}"', script)
+        self.assertIn("publish_staging", script)
+        self.assertIn("verify_exact_manifest", script)
+        self.assertNotIn("assert report", script)
+        self.assertNotIn("assert listed", script)
+        self.assertIn("FUSION_OUTPUT_EXACT_MANIFEST=OK", script)
+        self.assertIn('(\"train_xic_links\",)', script)
+        self.assertIn('(\"train_qwen\", \"selection_manifest\")', script)
+        self.assertIn('(\"train_signals\", \"train_examples\")', script)
+        self.assertNotIn('(\"validation_xic_links\",)', script)
+        self.assertNotIn("--validation-answers", script)
+        self.assertNotIn("BIOCODER_VALIDATION_ANSWERS", script)
+        self.assertNotIn("internal-test", script)
+
+
+if __name__ == "__main__":
+    unittest.main()

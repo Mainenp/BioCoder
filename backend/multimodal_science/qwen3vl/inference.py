@@ -1,0 +1,1138 @@
+"""Resumable, provenance-bound Qwen3-VL inference over prompt-only bundles."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import math
+import os
+import random
+import re
+from dataclasses import asdict, dataclass
+from datetime import datetime, timezone
+from importlib.metadata import PackageNotFoundError, version
+from pathlib import Path, PurePosixPath
+from typing import Any, Callable, Protocol, Sequence
+
+from multimodal_science.data.manifest import sha256_file
+from multimodal_science.qwen3vl.inference_bundle import (
+    BUNDLE_PROMPT_SCHEMA,
+    BUNDLE_SCHEMA,
+)
+from multimodal_science.qwen3vl.lora_training import LORA_TRAINING_REPORT_SCHEMA
+
+GENERATION_CONFIG_SCHEMA = "chrompeak-qwen3vl-generation-config-v1"
+GENERATION_RECORD_SCHEMA = "chrompeak-qwen3vl-generation-record-v1"
+GENERATION_REPORT_SCHEMA = "chrompeak-qwen3vl-generation-v1"
+PREDICTION_SCHEMA = "chrompeak-qwen3vl-prediction-v1"
+_HEX_24 = re.compile(r"^[0-9a-f]{24}$")
+_HEX_40_TO_64 = re.compile(r"^[0-9a-f]{40,64}$")
+_HEX_64 = re.compile(r"^[0-9a-f]{64}$")
+
+
+@dataclass(frozen=True)
+class GenerationSettings:
+    batch_size: int = 1
+    max_new_tokens: int = 64
+    do_sample: bool = False
+    temperature: float | None = None
+    top_p: float | None = None
+    seed: int = 17
+    dtype: str = "auto"
+    device_map: str = "auto"
+    attention_implementation: str | None = None
+
+
+@dataclass(frozen=True)
+class PromptRequest:
+    instruction_id: str
+    task: str
+    image_path: Path
+    prompt: str
+    language: str | None = None
+    pair_id: str | None = None
+
+
+@dataclass(frozen=True)
+class AdapterSpec:
+    root: Path
+    training_report_sha256: str
+    manifest_sha256: str
+
+
+@dataclass(frozen=True)
+class FinalBenchmarkAccessSpec:
+    protocol_root: Path
+    protocol_sha256: str
+    ledger_dir: Path
+    candidate_name: str
+
+
+@dataclass(frozen=True)
+class QwenInferenceResult:
+    output_dir: Path
+    report_path: Path
+    report_sha256: str
+    predictions_path: Path
+    prediction_records: int
+    complete_prompt_coverage: bool
+    development_comparison_candidate: bool
+    internal_test_accessed: bool = False
+    final_benchmark_candidate: bool = False
+
+
+class BatchGenerator(Protocol):
+    @property
+    def metadata(self) -> dict[str, Any]: ...
+
+    def generate(
+        self,
+        requests: Sequence[PromptRequest],
+        settings: GenerationSettings,
+    ) -> list[str]: ...
+
+
+GeneratorFactory = Callable[
+    [str, str, GenerationSettings, Path | None],
+    BatchGenerator,
+]
+AdapterVerifier = Callable[..., tuple[Path, dict[str, Any]]]
+
+
+def _require(condition: bool, message: str) -> None:
+    if not condition:
+        raise ValueError(message)
+
+
+def _object(value: Any, context: str) -> dict[str, Any]:
+    _require(isinstance(value, dict), f"Expected an object for {context}")
+    return value
+
+
+def _read_json(path: Path, context: str) -> dict[str, Any]:
+    _require(path.is_file(), f"Missing {context}: {path}")
+    try:
+        return _object(json.loads(path.read_text(encoding="utf-8")), context)
+    except json.JSONDecodeError as error:
+        raise ValueError(f"Invalid JSON for {context}: {path}") from error
+
+
+def _safe_child(root: Path, relative: Any, context: str) -> Path:
+    _require(isinstance(relative, str) and bool(relative), f"Invalid path for {context}")
+    relative_path = Path(relative)
+    _require(not relative_path.is_absolute(), f"Expected a relative path for {context}")
+    candidate = (root / relative_path).resolve()
+    try:
+        candidate.relative_to(root)
+    except ValueError as error:
+        raise ValueError(f"Path escapes root for {context}") from error
+    return candidate
+
+
+def _resolve_image(assets_root: Path, relative: Any, instruction_id: str) -> Path:
+    _require(isinstance(relative, str) and bool(relative), "Image path is missing")
+    _require("\\" not in relative, f"Non-portable image path: {instruction_id}")
+    path = PurePosixPath(relative)
+    _require(
+        not path.is_absolute()
+        and all(part not in {"", ".", ".."} for part in path.parts),
+        f"Unsafe image path: {instruction_id}",
+    )
+    candidate = (assets_root / Path(*path.parts)).resolve()
+    try:
+        candidate.relative_to(assets_root)
+    except ValueError as error:
+        raise ValueError(f"Image path escapes assets root: {instruction_id}") from error
+    _require(candidate.is_file(), f"Image not found: {relative}")
+    return candidate
+
+
+def _read_jsonl(path: Path, context: str) -> list[dict[str, Any]]:
+    _require(path.is_file(), f"Missing {context}: {path}")
+    records = []
+    with path.open(encoding="utf-8") as stream:
+        for line_number, line in enumerate(stream, start=1):
+            _require(line.strip() != "", f"Blank {context} line: {line_number}")
+            try:
+                records.append(_object(json.loads(line), f"{context} line {line_number}"))
+            except json.JSONDecodeError as error:
+                raise ValueError(f"Invalid {context} JSON at line {line_number}") from error
+    _require(bool(records), f"{context} is empty")
+    return records
+
+
+def verify_generation_output(output_dir: Path) -> str:
+    """Verify a completed generation report and every artifact it binds."""
+
+    root = output_dir.resolve()
+    _require(root.is_dir(), f"Generation output directory not found: {root}")
+    report_path = root / "generation_report.json"
+    report = _read_json(report_path, "generation report")
+    _require(
+        report.get("schema_version") == GENERATION_REPORT_SCHEMA,
+        "Unexpected generation report schema",
+    )
+    artifacts = _object(report.get("artifacts"), "generation report artifacts")
+    expected_artifacts = {
+        "run_config",
+        "runtime_metadata",
+        "generation_records",
+        "predictions",
+    }
+    _require(
+        set(artifacts) == expected_artifacts,
+        "Generation report artifact set is incomplete or unexpected",
+    )
+    record_counts: dict[str, int] = {}
+    for name in sorted(expected_artifacts):
+        descriptor = _object(artifacts.get(name), f"generation artifact {name}")
+        path = _safe_child(root, descriptor.get("path"), f"generation artifact {name}")
+        expected_sha256 = descriptor.get("sha256")
+        _require(
+            isinstance(expected_sha256, str) and bool(_HEX_64.fullmatch(expected_sha256)),
+            f"Invalid generation artifact hash: {name}",
+        )
+        _require(path.is_file(), f"Missing generation artifact: {name}")
+        _require(
+            sha256_file(path) == expected_sha256,
+            f"Generation artifact hash mismatch: {name}",
+        )
+        if "records" in descriptor:
+            records = descriptor.get("records")
+            _require(
+                isinstance(records, int) and not isinstance(records, bool) and records >= 1,
+                f"Invalid generation artifact record count: {name}",
+            )
+            _require(
+                len(_read_jsonl(path, f"generation artifact {name}")) == records,
+                f"Generation artifact record count mismatch: {name}",
+            )
+            record_counts[name] = records
+    _require(
+        record_counts.get("generation_records") == record_counts.get("predictions"),
+        "Generation evidence and prediction counts differ",
+    )
+    counts = _object(report.get("counts"), "generation report counts")
+    _require(
+        counts.get("predictions") == record_counts.get("predictions"),
+        "Generation report prediction count mismatch",
+    )
+    return sha256_file(report_path)
+
+
+def _write_json(path: Path, payload: dict[str, Any]) -> None:
+    path.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+
+def _write_jsonl(path: Path, records: Sequence[dict[str, Any]]) -> None:
+    with path.open("w", encoding="utf-8", newline="\n") as stream:
+        for record in records:
+            stream.write(
+                json.dumps(
+                    record,
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                    sort_keys=True,
+                )
+                + "\n"
+            )
+
+
+def _append_jsonl(path: Path, records: Sequence[dict[str, Any]]) -> None:
+    with path.open("a", encoding="utf-8", newline="\n") as stream:
+        for record in records:
+            stream.write(
+                json.dumps(
+                    record,
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                    sort_keys=True,
+                )
+                + "\n"
+            )
+        stream.flush()
+        os.fsync(stream.fileno())
+
+
+def _validate_settings(settings: GenerationSettings) -> None:
+    _require(settings.batch_size >= 1, "Batch size must be positive")
+    _require(settings.max_new_tokens >= 1, "max_new_tokens must be positive")
+    _require(isinstance(settings.seed, int), "Seed must be an integer")
+    _require(bool(settings.dtype), "dtype must not be empty")
+    _require(bool(settings.device_map), "device_map must not be empty")
+    if settings.do_sample:
+        _require(
+            settings.temperature is not None
+            and math.isfinite(settings.temperature)
+            and settings.temperature > 0.0,
+            "Sampling requires a positive finite temperature",
+        )
+        _require(
+            settings.top_p is not None
+            and math.isfinite(settings.top_p)
+            and 0.0 < settings.top_p <= 1.0,
+            "Sampling requires top_p in (0, 1]",
+        )
+    else:
+        _require(
+            settings.temperature is None and settings.top_p is None,
+            "Greedy generation must not declare temperature or top_p",
+        )
+
+
+def _version_tuple(value: str) -> tuple[int, int, int]:
+    match = re.match(r"^(\d+)\.(\d+)\.(\d+)", value)
+    if match is None:
+        raise RuntimeError(f"Cannot parse package version: {value}")
+    return tuple(int(part) for part in match.groups())
+
+
+def _verify_adapter(
+    specification: AdapterSpec,
+    *,
+    model_name_or_path: str,
+    model_revision: str,
+    model_artifact_sha256: str | None,
+) -> tuple[Path, dict[str, Any]]:
+    root = specification.root.resolve()
+    _require(root.is_dir(), f"LoRA adapter root not found: {root}")
+    _require(
+        bool(_HEX_64.fullmatch(specification.training_report_sha256)),
+        "LoRA training report SHA-256 must be lowercase hexadecimal",
+    )
+    _require(
+        bool(_HEX_64.fullmatch(specification.manifest_sha256)),
+        "LoRA manifest SHA-256 must be lowercase hexadecimal",
+    )
+    _require(
+        model_artifact_sha256 is not None,
+        "LoRA inference requires the immutable base-model artifact SHA-256",
+    )
+
+    manifest_path = root / "artifact_manifest.sha256"
+    _require(manifest_path.is_file(), f"Missing LoRA artifact manifest: {manifest_path}")
+    _require(
+        sha256_file(manifest_path) == specification.manifest_sha256,
+        "LoRA artifact manifest hash mismatch",
+    )
+    manifest: dict[str, str] = {}
+    for line_number, raw_line in enumerate(
+        manifest_path.read_text(encoding="utf-8").splitlines(),
+        start=1,
+    ):
+        parts = raw_line.split("  ", maxsplit=1)
+        _require(len(parts) == 2, f"Malformed LoRA manifest line: {line_number}")
+        expected_hash, relative = parts
+        _require(
+            bool(_HEX_64.fullmatch(expected_hash)),
+            f"Invalid LoRA artifact hash at line {line_number}",
+        )
+        _require("\\" not in relative, f"Non-portable LoRA artifact path: {relative}")
+        relative_path = PurePosixPath(relative)
+        _require(
+            not relative_path.is_absolute()
+            and all(part not in {"", ".", ".."} for part in relative_path.parts),
+            f"Unsafe LoRA artifact path: {relative}",
+        )
+        _require(relative not in manifest, f"Duplicate LoRA artifact: {relative}")
+        artifact_path = (root / Path(*relative_path.parts)).resolve()
+        try:
+            artifact_path.relative_to(root)
+        except ValueError as error:
+            raise ValueError(f"LoRA artifact escapes root: {relative}") from error
+        _require(artifact_path.is_file(), f"Missing LoRA artifact: {relative}")
+        _require(
+            sha256_file(artifact_path) == expected_hash,
+            f"LoRA artifact hash mismatch: {relative}",
+        )
+        manifest[relative] = expected_hash
+
+    for required in (
+        "lora_training_report.json",
+        "adapter/adapter_config.json",
+        "adapter/adapter_model.safetensors",
+    ):
+        _require(required in manifest, f"LoRA manifest is missing: {required}")
+    unlisted_adapter_files = sorted(
+        path.relative_to(root).as_posix()
+        for path in (root / "adapter").rglob("*")
+        if path.is_file() and path.relative_to(root).as_posix() not in manifest
+    )
+    _require(
+        not unlisted_adapter_files,
+        f"LoRA adapter contains unlisted artifacts: {unlisted_adapter_files}",
+    )
+    report_path = root / "lora_training_report.json"
+    _require(
+        sha256_file(report_path) == specification.training_report_sha256,
+        "LoRA training report hash mismatch",
+    )
+    report = _read_json(report_path, "LoRA training report")
+    _require(
+        report.get("schema_version") == LORA_TRAINING_REPORT_SCHEMA,
+        "Unsupported LoRA training report schema",
+    )
+    _require(
+        isinstance(report.get("code_revision"), str)
+        and bool(_HEX_40_TO_64.fullmatch(report["code_revision"])),
+        "LoRA code revision is invalid",
+    )
+    contracts = _object(report.get("contracts"), "LoRA training contracts")
+    for name, expected in (
+        ("base_weights_frozen", True),
+        ("vision_tower_frozen", True),
+        ("vision_merger_frozen", True),
+        ("assistant_tokens_only_supervision", True),
+        ("train_split_only", True),
+        ("validation_prompts_opened", False),
+        ("validation_answers_opened", False),
+        ("internal_test_accessed", False),
+    ):
+        _require(contracts.get(name) is expected, f"LoRA contract failed: {name}")
+    _require(report.get("internal_test_accessed") is False, "LoRA training accessed test data")
+    model = _object(report.get("model"), "LoRA base model")
+    _require(model.get("revision") == model_revision, "LoRA base revision mismatch")
+    _require(
+        model.get("artifact_sha256") == model_artifact_sha256,
+        "LoRA base-model artifact hash mismatch",
+    )
+    _require(
+        model.get("adapter_target_modules")
+        == ["q_proj", "k_proj", "v_proj", "o_proj"],
+        "LoRA adapter target modules are unsupported",
+    )
+    training = _object(report.get("training"), "LoRA training")
+    training_records = training.get("training_records")
+    _require(
+        isinstance(training_records, int)
+        and not isinstance(training_records, bool)
+        and training_records >= 1,
+        "LoRA training-record count is invalid",
+    )
+    development_training_complete = report.get("development_training_complete")
+    _require(
+        isinstance(development_training_complete, bool),
+        "LoRA training-completion flag is invalid",
+    )
+    _require(
+        report.get("development_comparison_eligible") is False,
+        "Training must not self-qualify as evaluated development evidence",
+    )
+    _require(
+        report.get("final_benchmark_eligible") is False,
+        "LoRA training cannot be a final benchmark",
+    )
+    return root / "adapter", {
+        "training_report_sha256": specification.training_report_sha256,
+        "manifest_sha256": specification.manifest_sha256,
+        "code_revision": report.get("code_revision"),
+        "trained_base_name_or_path": model.get("name_or_path"),
+        "development_training_complete": development_training_complete,
+        "training_records": training_records,
+    }
+
+
+class _TransformersGenerator:
+    def __init__(
+        self,
+        model_name_or_path: str,
+        model_revision: str,
+        settings: GenerationSettings,
+        adapter_dir: Path | None,
+    ) -> None:
+        try:
+            transformers_version = version("transformers")
+        except PackageNotFoundError as error:
+            raise RuntimeError(
+                "Qwen3-VL inference requires transformers>=4.57.0"
+            ) from error
+        if _version_tuple(transformers_version) < (4, 57, 0):
+            raise RuntimeError(
+                f"Qwen3-VL requires transformers>=4.57.0; found {transformers_version}"
+            )
+        try:
+            import torch
+            from transformers import AutoModelForImageTextToText, AutoProcessor
+        except ImportError as error:
+            raise RuntimeError(
+                "Qwen3-VL inference requires torch and Transformers image-text support"
+            ) from error
+
+        random.seed(settings.seed)
+        torch.manual_seed(settings.seed)
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed_all(settings.seed)
+        model_kwargs: dict[str, Any] = {
+            "revision": model_revision,
+            "dtype": settings.dtype,
+            "device_map": settings.device_map,
+            "trust_remote_code": False,
+        }
+        if settings.attention_implementation is not None:
+            model_kwargs["attn_implementation"] = settings.attention_implementation
+        self._model = AutoModelForImageTextToText.from_pretrained(
+            model_name_or_path,
+            **model_kwargs,
+        )
+        peft_version: str | None = None
+        adapter_class: str | None = None
+        if adapter_dir is not None:
+            try:
+                from peft import PeftModel
+            except ImportError as error:
+                raise RuntimeError("LoRA inference requires peft") from error
+            self._model = PeftModel.from_pretrained(
+                self._model,
+                adapter_dir,
+                is_trainable=False,
+            )
+            peft_version = version("peft")
+            adapter_class = type(self._model).__name__
+        self._model.eval()
+        self._processor = AutoProcessor.from_pretrained(
+            model_name_or_path,
+            revision=model_revision,
+            trust_remote_code=False,
+        )
+        tokenizer = getattr(self._processor, "tokenizer", None)
+        if tokenizer is not None:
+            tokenizer.padding_side = "left"
+        resolved_revision = getattr(self._model.config, "_commit_hash", None)
+        self._torch = torch
+        self._metadata = {
+            "backend": "transformers",
+            "transformers_version": transformers_version,
+            "torch_version": torch.__version__,
+            "model_class": type(self._model).__name__,
+            "processor_class": type(self._processor).__name__,
+            "resolved_model_revision": resolved_revision,
+            "cuda_available": bool(torch.cuda.is_available()),
+            "cuda_device_count": int(torch.cuda.device_count()),
+            "adapter_loaded": adapter_dir is not None,
+            "adapter_class": adapter_class,
+            "peft_version": peft_version,
+        }
+
+    @property
+    def metadata(self) -> dict[str, Any]:
+        return dict(self._metadata)
+
+    def generate(
+        self,
+        requests: Sequence[PromptRequest],
+        settings: GenerationSettings,
+    ) -> list[str]:
+        messages = []
+        for request in requests:
+            text = request.prompt.replace("<image>", "", 1).strip()
+            messages.append(
+                [
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "image", "image": str(request.image_path)},
+                            {"type": "text", "text": text},
+                        ],
+                    }
+                ]
+            )
+        inputs = self._processor.apply_chat_template(
+            messages,
+            tokenize=True,
+            add_generation_prompt=True,
+            return_dict=True,
+            return_tensors="pt",
+            padding=True,
+        )
+        inputs = inputs.to(self._model.device)
+        generation_arguments: dict[str, Any] = {
+            "max_new_tokens": settings.max_new_tokens,
+            "do_sample": settings.do_sample,
+        }
+        if settings.do_sample:
+            generation_arguments.update(
+                {"temperature": settings.temperature, "top_p": settings.top_p}
+            )
+        else:
+            generation_arguments.update(
+                {"temperature": None, "top_p": None, "top_k": None}
+            )
+        with self._torch.inference_mode():
+            generated_ids = self._model.generate(**inputs, **generation_arguments)
+        trimmed = [
+            output_ids[len(input_ids) :]
+            for input_ids, output_ids in zip(inputs.input_ids, generated_ids)
+        ]
+        return list(
+            self._processor.batch_decode(
+                trimmed,
+                skip_special_tokens=True,
+                clean_up_tokenization_spaces=False,
+            )
+        )
+
+
+def _transformers_generator_factory(
+    model_name_or_path: str,
+    model_revision: str,
+    settings: GenerationSettings,
+    adapter_dir: Path | None,
+) -> BatchGenerator:
+    return _TransformersGenerator(
+        model_name_or_path,
+        model_revision,
+        settings,
+        adapter_dir,
+    )
+
+
+def _validate_prompt(record: dict[str, Any]) -> None:
+    instruction_id = record.get("instruction_id")
+    _require(record.get("schema_version") == BUNDLE_PROMPT_SCHEMA, "Invalid prompt schema")
+    _require(
+        isinstance(instruction_id, str) and bool(_HEX_24.fullmatch(instruction_id)),
+        f"Invalid inference instruction_id: {instruction_id}",
+    )
+    _require(isinstance(record.get("task"), str) and bool(record["task"]), "Missing task")
+    _require(
+        isinstance(record.get("prompt"), str)
+        and record["prompt"].count("<image>") == 1,
+        f"Invalid prompt text: {instruction_id}",
+    )
+
+
+def _load_bundle(
+    bundle_root: Path,
+    expected_bundle_report_sha256: str,
+    *,
+    final_access: dict[str, str] | None = None,
+) -> tuple[dict[str, Any], list[dict[str, Any]], str]:
+    report_path = bundle_root / "inference_bundle_report.json"
+    report = _read_json(report_path, "inference bundle report")
+    report_hash = sha256_file(report_path)
+    _require(report_hash == expected_bundle_report_sha256, "Inference bundle hash mismatch")
+    final_mode = final_access is not None
+    expected_schema = (
+        "chrompeak-qwen3vl-final-inference-bundle-v1" if final_mode else BUNDLE_SCHEMA
+    )
+    _require(report.get("schema_version") == expected_schema, "Unsupported bundle schema")
+    contracts = _object(report.get("contracts"), "inference bundle contracts")
+    _require(contracts.get("prompt_only") is True, "Bundle contract failed: prompt_only")
+    if final_mode:
+        _require(
+            contracts.get("answer_key_materialized_in_this_root") is False,
+            "Final prompt root contains an answer key",
+        )
+        _require(report.get("internal_test_accessed") is True, "Final bundle is not test-bound")
+        source = _object(report.get("source"), "final inference source")
+        _require(
+            source.get("protocol_sha256") == final_access["protocol_sha256"],
+            "Final inference protocol drift",
+        )
+        _require(
+            source.get("access_id") == final_access["access_id"],
+            "Final inference access drift",
+        )
+    else:
+        for name, expected in (
+            ("answer_key_opened", False),
+            ("answer_key_materialized", False),
+            ("internal_test_accessed", False),
+        ):
+            _require(contracts.get(name) is expected, f"Bundle contract failed: {name}")
+        _require(report.get("internal_test_accessed") is False, "Bundle accessed internal test")
+    artifacts = _object(report.get("artifacts"), "inference bundle artifacts")
+    artifact = _object(artifacts.get("inference_prompts"), "inference prompts artifact")
+    prompt_path = _safe_child(bundle_root, artifact.get("path"), "inference prompts")
+    expected_hash = artifact.get("sha256")
+    _require(
+        isinstance(expected_hash, str) and bool(_HEX_64.fullmatch(expected_hash)),
+        "Inference prompt SHA-256 is invalid",
+    )
+    _require(sha256_file(prompt_path) == expected_hash, "Inference prompt hash mismatch")
+    prompts = _read_jsonl(prompt_path, "inference prompts")
+    _require(artifact.get("records") == len(prompts), "Inference prompt count mismatch")
+    for record in prompts:
+        _validate_prompt(record)
+    ids = [record["instruction_id"] for record in prompts]
+    _require(len(set(ids)) == len(ids), "Duplicate inference instruction IDs")
+    return report, prompts, expected_hash
+
+
+def _verify_final_inference_access(
+    spec: FinalBenchmarkAccessSpec,
+    *,
+    model_name_or_path: str,
+    model_revision: str,
+    model_artifact_sha256: str | None,
+    adapter: AdapterSpec | None,
+    settings: GenerationSettings,
+) -> dict[str, str]:
+    from multimodal_science.qwen3vl.final_benchmark_protocol import (
+        verify_final_benchmark_access,
+    )
+
+    state = verify_final_benchmark_access(
+        protocol_root=spec.protocol_root,
+        expected_protocol_sha256=spec.protocol_sha256,
+        ledger_dir=spec.ledger_dir,
+    )
+    _require(not state.completed, "Final benchmark access is already completed")
+    _require(
+        spec.candidate_name
+        in {
+            "qwen3vl_zero_shot",
+            "qwen3vl_image_lora",
+            "qwen3vl_image_xic_fusion",
+        },
+        "Unsupported final Qwen candidate",
+    )
+    protocol = _read_json(
+        spec.protocol_root.resolve() / "final_benchmark_protocol.json",
+        "final benchmark protocol",
+    )
+    locks = _object(protocol.get("locks"), "final benchmark locks")
+    candidate_descriptor = _object(locks.get("candidate"), "candidate lock")
+    candidate_path = _safe_child(
+        spec.protocol_root.resolve(), candidate_descriptor.get("path"), "candidate lock"
+    )
+    _require(
+        sha256_file(candidate_path) == candidate_descriptor.get("sha256"),
+        "Candidate lock drift",
+    )
+    candidate_lock = _read_json(candidate_path, "candidate lock")
+    shared = _object(candidate_lock.get("shared"), "candidate shared inputs")
+    base_model = _object(shared.get("base_model"), "candidate base model")
+    _require(
+        base_model.get("name_or_path") == model_name_or_path,
+        "Final base-model path drift",
+    )
+    _require(
+        base_model.get("revision") == model_revision,
+        "Final base-model revision drift",
+    )
+    _require(
+        base_model.get("artifact_sha256") == model_artifact_sha256,
+        "Final base-model artifact drift",
+    )
+    models = _object(candidate_lock.get("models"), "candidate models")
+    selected = _object(models.get(spec.candidate_name), "selected Qwen candidate")
+    policy = _object(shared.get("inference_policy"), "final inference policy")
+    for field in (
+        "batch_size",
+        "max_new_tokens",
+        "do_sample",
+        "temperature",
+        "top_p",
+        "seed",
+        "dtype",
+    ):
+        _require(
+            getattr(settings, field) == policy.get(field),
+            f"Final generation setting drift: {field}",
+        )
+    if spec.candidate_name == "qwen3vl_image_xic_fusion":
+        expected_device_map = policy.get("fusion_device_map")
+        expected_attention = policy.get("fusion_attention_implementation")
+    else:
+        expected_device_map = policy.get("zero_and_lora_device_map")
+        expected_attention = policy.get("zero_and_lora_attention_implementation")
+    _require(settings.device_map == expected_device_map, "Final device-map policy drift")
+    _require(
+        settings.attention_implementation == expected_attention,
+        "Final attention implementation drift",
+    )
+    if spec.candidate_name == "qwen3vl_zero_shot":
+        _require(adapter is None, "Zero-shot final candidate must not load an adapter")
+    else:
+        _require(adapter is not None, "Final adapted Qwen candidate requires its adapter")
+        _require(
+            str(adapter.root.resolve()) == str(Path(str(selected.get("root"))).resolve()),
+            "Final adapter root drift",
+        )
+        _require(
+            adapter.training_report_sha256 == selected.get("training_report_sha256"),
+            "Final adapter training-report drift",
+        )
+        _require(
+            adapter.manifest_sha256 == selected.get("manifest_sha256"),
+            "Final adapter manifest drift",
+        )
+    return {
+        "access_id": state.access_id,
+        "protocol_sha256": spec.protocol_sha256,
+        "candidate_name": spec.candidate_name,
+    }
+
+
+def _journal_records(
+    path: Path,
+    selected_prompts: Sequence[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    if not path.exists():
+        return []
+    records = _read_jsonl(path, "generation journal")
+    _require(len(records) <= len(selected_prompts), "Generation journal is too long")
+    for index, record in enumerate(records):
+        prompt = selected_prompts[index]
+        expected_id = prompt["instruction_id"]
+        _require(
+            record.get("schema_version") == GENERATION_RECORD_SCHEMA,
+            "Invalid generation journal schema",
+        )
+        _require(record.get("instruction_id") == expected_id, "Journal is not a prompt prefix")
+        _require(isinstance(record.get("response"), str), "Journal response is invalid")
+        _require(record.get("task") == prompt.get("task"), "Journal task mismatch")
+        _require(record.get("image") == prompt.get("image"), "Journal image mismatch")
+        _require(
+            record.get("prompt_sha256")
+            == hashlib.sha256(str(prompt["prompt"]).encode("utf-8")).hexdigest(),
+            "Journal prompt hash mismatch",
+        )
+        _require(
+            isinstance(record.get("image_sha256"), str)
+            and bool(_HEX_64.fullmatch(record["image_sha256"])),
+            "Journal image hash is invalid",
+        )
+        _require(
+            record.get("response_sha256")
+            == hashlib.sha256(record["response"].encode("utf-8")).hexdigest(),
+            "Journal response hash mismatch",
+        )
+        for name in ("language", "pair_id"):
+            _require(record.get(name) == prompt.get(name), f"Journal {name} mismatch")
+    return records
+
+
+def _prompt_order_sha256(prompts: Sequence[dict[str, Any]]) -> str:
+    payload = "".join(f"{record['instruction_id']}\n" for record in prompts)
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def run_qwen_inference(
+    bundle_root: Path,
+    assets_root: Path,
+    output_dir: Path,
+    *,
+    expected_bundle_report_sha256: str,
+    model_name_or_path: str,
+    model_revision: str,
+    settings: GenerationSettings = GenerationSettings(),
+    model_artifact_sha256: str | None = None,
+    adapter: AdapterSpec | None = None,
+    max_records: int | None = None,
+    resume: bool = False,
+    generator_factory: GeneratorFactory | None = None,
+    adapter_verifier: AdapterVerifier | None = None,
+    final_benchmark_access: FinalBenchmarkAccessSpec | None = None,
+) -> QwenInferenceResult:
+    """Generate predictions without accepting an instruction-root or answer-key path."""
+
+    bundle_root = bundle_root.resolve()
+    assets_root = assets_root.resolve()
+    output_dir = output_dir.resolve()
+    _require(bundle_root.is_dir(), f"Inference bundle not found: {bundle_root}")
+    _require(assets_root.is_dir(), f"Assets root not found: {assets_root}")
+    _require(not output_dir.exists(), f"Inference output already exists: {output_dir}")
+    _require(
+        bool(_HEX_64.fullmatch(expected_bundle_report_sha256)),
+        "Expected bundle SHA-256 must be lowercase hexadecimal",
+    )
+    _require(bool(model_name_or_path), "Model name or path must not be empty")
+    _require(bool(model_revision), "Model revision must not be empty")
+    if model_artifact_sha256 is not None:
+        _require(
+            bool(_HEX_64.fullmatch(model_artifact_sha256)),
+            "Model artifact SHA-256 must be lowercase hexadecimal",
+        )
+    adapter_dir: Path | None = None
+    adapter_metadata: dict[str, Any] | None = None
+    if adapter is not None:
+        verify_adapter = adapter_verifier or _verify_adapter
+        adapter_dir, adapter_metadata = verify_adapter(
+            adapter,
+            model_name_or_path=model_name_or_path,
+            model_revision=model_revision,
+            model_artifact_sha256=model_artifact_sha256,
+        )
+    _validate_settings(settings)
+    if max_records is not None:
+        _require(max_records >= 1, "max_records must be positive")
+
+    final_access = (
+        _verify_final_inference_access(
+            final_benchmark_access,
+            model_name_or_path=model_name_or_path,
+            model_revision=model_revision,
+            model_artifact_sha256=model_artifact_sha256,
+            adapter=adapter,
+            settings=settings,
+        )
+        if final_benchmark_access is not None
+        else None
+    )
+    if final_access is not None:
+        _require(
+            max_records is None,
+            "Final benchmark inference requires complete prompt coverage",
+        )
+
+    bundle_report, prompts, prompt_artifact_sha256 = _load_bundle(
+        bundle_root,
+        expected_bundle_report_sha256,
+        final_access=final_access,
+    )
+    selected_prompts = prompts[:max_records] if max_records is not None else prompts
+    complete_prompt_coverage = len(selected_prompts) == len(prompts)
+    run_config = {
+        "schema_version": GENERATION_CONFIG_SCHEMA,
+        "bundle_report_sha256": expected_bundle_report_sha256,
+        "prompt_artifact_sha256": prompt_artifact_sha256,
+        "prompt_order_sha256": _prompt_order_sha256(selected_prompts),
+        "model": {
+            "name_or_path": model_name_or_path,
+            "requested_revision": model_revision,
+            "artifact_sha256": model_artifact_sha256,
+            "adapter": (
+                {
+                    "root": str(adapter.root.resolve()),
+                    **adapter_metadata,
+                }
+                if adapter_metadata is not None
+                else None
+            ),
+        },
+        "generation": asdict(settings),
+        "scope": {
+            "bundle_prompts": len(prompts),
+            "selected_prompts": len(selected_prompts),
+            "max_records": max_records,
+            "complete_prompt_coverage": complete_prompt_coverage,
+        },
+        "contracts": {
+            "input_is_prompt_only_bundle": True,
+            "instruction_root_not_accepted": True,
+            "answer_key_path_not_accepted": True,
+            "internal_test_accessed": final_access is not None,
+            "final_benchmark_access": final_access,
+        },
+    }
+
+    output_dir.parent.mkdir(parents=True, exist_ok=True)
+    work_dir = output_dir.parent / f".{output_dir.name}.work"
+    run_config_path = work_dir / "run_config.json"
+    journal_path = work_dir / "generation_records.jsonl"
+    runtime_path = work_dir / "runtime_metadata.json"
+    if work_dir.exists():
+        _require(resume, f"Inference work directory exists; use resume: {work_dir}")
+        _require(
+            _read_json(run_config_path, "existing run config") == run_config,
+            "Resume configuration does not match the existing run",
+        )
+    else:
+        work_dir.mkdir()
+        _write_json(run_config_path, run_config)
+
+    journal = _journal_records(journal_path, selected_prompts)
+    generator: BatchGenerator | None = None
+    if len(journal) == len(selected_prompts):
+        runtime_metadata = _read_json(runtime_path, "existing runtime metadata")
+    else:
+        factory = generator_factory or _transformers_generator_factory
+        generator = factory(model_name_or_path, model_revision, settings, adapter_dir)
+        runtime_metadata = _object(generator.metadata, "generator metadata")
+        _require(
+            isinstance(runtime_metadata.get("backend"), str)
+            and bool(runtime_metadata["backend"]),
+            "Generator backend metadata is missing",
+        )
+        if runtime_path.exists():
+            _require(
+                _read_json(runtime_path, "existing runtime metadata")
+                == runtime_metadata,
+                "Resume runtime does not match the existing run",
+            )
+        else:
+            _write_json(runtime_path, runtime_metadata)
+    _require(
+        isinstance(runtime_metadata.get("backend"), str)
+        and bool(runtime_metadata["backend"]),
+        "Generator backend metadata is missing",
+    )
+
+    image_hash_cache: dict[str, str] = {}
+    for batch_start in range(len(journal), len(selected_prompts), settings.batch_size):
+        batch_prompts = selected_prompts[
+            batch_start : batch_start + settings.batch_size
+        ]
+        requests = []
+        for record in batch_prompts:
+            image_path = _resolve_image(
+                assets_root,
+                record.get("image"),
+                str(record["instruction_id"]),
+            )
+            requests.append(
+                PromptRequest(
+                    instruction_id=str(record["instruction_id"]),
+                    task=str(record["task"]),
+                    image_path=image_path,
+                    prompt=str(record["prompt"]),
+                    language=record.get("language"),
+                    pair_id=record.get("pair_id"),
+                )
+            )
+        _require(generator is not None, "Generator is unavailable for an incomplete run")
+        responses = generator.generate(requests, settings)
+        _require(len(responses) == len(requests), "Generator returned the wrong batch size")
+        new_records = []
+        for record, request, response in zip(batch_prompts, requests, responses):
+            _require(isinstance(response, str), "Generator response must be a string")
+            image_key = str(request.image_path)
+            if image_key not in image_hash_cache:
+                image_hash_cache[image_key] = sha256_file(request.image_path)
+            generated_record: dict[str, Any] = {
+                "schema_version": GENERATION_RECORD_SCHEMA,
+                "instruction_id": request.instruction_id,
+                "task": request.task,
+                "image": str(record["image"]),
+                "image_sha256": image_hash_cache[image_key],
+                "prompt_sha256": hashlib.sha256(
+                    request.prompt.encode("utf-8")
+                ).hexdigest(),
+                "response": response,
+                "response_sha256": hashlib.sha256(response.encode("utf-8")).hexdigest(),
+            }
+            if request.language is not None:
+                generated_record["language"] = request.language
+            if request.pair_id is not None:
+                generated_record["pair_id"] = request.pair_id
+            new_records.append(generated_record)
+        _append_jsonl(journal_path, new_records)
+        journal.extend(new_records)
+
+    _require(len(journal) == len(selected_prompts), "Generation did not cover selected prompts")
+    predictions = [
+        {
+            "schema_version": PREDICTION_SCHEMA,
+            "instruction_id": record["instruction_id"],
+            "response": record["response"],
+        }
+        for record in journal
+    ]
+    predictions_path = work_dir / "predictions.jsonl"
+    _write_jsonl(predictions_path, predictions)
+    resolved_revision = runtime_metadata.get("resolved_model_revision")
+    model_identity_immutable = bool(
+        model_artifact_sha256
+        or (
+            isinstance(resolved_revision, str)
+            and bool(_HEX_40_TO_64.fullmatch(resolved_revision))
+        )
+    )
+    immutable_generation_candidate = bool(
+        complete_prompt_coverage
+        and runtime_metadata.get("backend") == "transformers"
+        and model_identity_immutable
+        and (
+            adapter_metadata is None
+            or adapter_metadata["development_training_complete"] is True
+        )
+    )
+    development_candidate = bool(
+        final_access is None and immutable_generation_candidate
+    )
+    final_benchmark_candidate = bool(
+        final_access is not None and immutable_generation_candidate
+    )
+    source = _object(bundle_report.get("source"), "bundle source")
+    report_path = work_dir / "generation_report.json"
+    _write_json(
+        report_path,
+        {
+            "schema_version": GENERATION_REPORT_SCHEMA,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "source": {
+                "bundle_report_sha256": expected_bundle_report_sha256,
+                "prompt_artifact_sha256": prompt_artifact_sha256,
+                "instruction_report_sha256": source.get(
+                    "instruction_report_sha256"
+                ),
+                "validation_prompts_sha256": source.get(
+                    "validation_prompts_sha256"
+                ),
+                "source_dataset_report_sha256": source.get(
+                    "source_dataset_report_sha256"
+                ) or source.get("dataset_report_sha256"),
+                "protocol_sha256": source.get("protocol_sha256"),
+                "access_id": source.get("access_id"),
+            },
+            "model": {
+                "name_or_path": model_name_or_path,
+                "requested_revision": model_revision,
+                "resolved_revision": resolved_revision,
+                "artifact_sha256": model_artifact_sha256,
+                "identity_immutable": model_identity_immutable,
+                "adapter": adapter_metadata,
+            },
+            "runtime": runtime_metadata,
+            "generation": asdict(settings),
+            "scope": run_config["scope"],
+            "counts": {
+                "predictions": len(predictions),
+                "unique_images_opened": len({record["image"] for record in journal}),
+            },
+            "contracts": {
+                "input_is_prompt_only_bundle": True,
+                "answer_key_available_to_runner": False,
+                "answer_key_opened": False,
+                "instruction_manifest_available_to_runner": False,
+                "internal_test_accessed": final_access is not None,
+                "final_benchmark_access": final_access,
+                "predictions_preserve_prompt_order": True,
+            },
+            "artifacts": {
+                "run_config": {
+                    "path": run_config_path.name,
+                    "sha256": sha256_file(run_config_path),
+                },
+                "runtime_metadata": {
+                    "path": runtime_path.name,
+                    "sha256": sha256_file(runtime_path),
+                },
+                "generation_records": {
+                    "path": journal_path.name,
+                    "sha256": sha256_file(journal_path),
+                    "records": len(journal),
+                },
+                "predictions": {
+                    "path": predictions_path.name,
+                    "sha256": sha256_file(predictions_path),
+                    "records": len(predictions),
+                },
+            },
+            "prediction_generation_provenance_available": True,
+            "development_comparison_candidate": development_candidate,
+            "final_benchmark_candidate": final_benchmark_candidate,
+            "internal_test_accessed": final_access is not None,
+            "final_benchmark_eligible": False,
+        },
+    )
+    work_dir.replace(output_dir)
+
+    final_report = output_dir / "generation_report.json"
+    final_predictions = output_dir / "predictions.jsonl"
+    return QwenInferenceResult(
+        output_dir=output_dir,
+        report_path=final_report,
+        report_sha256=sha256_file(final_report),
+        predictions_path=final_predictions,
+        prediction_records=len(predictions),
+        complete_prompt_coverage=complete_prompt_coverage,
+        development_comparison_candidate=development_candidate,
+        internal_test_accessed=final_access is not None,
+        final_benchmark_candidate=final_benchmark_candidate,
+    )

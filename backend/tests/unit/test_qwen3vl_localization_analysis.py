@@ -1,0 +1,491 @@
+from __future__ import annotations
+
+import json
+import math
+import tempfile
+import unittest
+from pathlib import Path
+
+from multimodal_science.data.manifest import sha256_file
+from multimodal_science.chrompeakformer.multimodal_dataset import DATASET_SCHEMA
+from multimodal_science.qwen3vl.evaluation import (
+    BILINGUAL_EVALUATION_RECORD_SCHEMA,
+    BILINGUAL_EVALUATION_REPORT_SCHEMA,
+)
+from multimodal_science.qwen3vl.localization_analysis import (
+    METADATA_REPORT_SCHEMA,
+    METADATA_SCHEMA,
+    REPORT_SCHEMA,
+    _failures,
+    _localization_metrics,
+    _positive_grounding,
+    _stratum,
+    _tertile_boundaries,
+    analyze_localization,
+    build_localization_metadata,
+)
+
+
+def _write_json(path: Path, payload: object) -> None:
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def _manifest(root: Path, *names: str) -> None:
+    (root / "artifact_manifest.sha256").write_text(
+        "".join(f"{sha256_file(root / name)}  {name}\n" for name in names), encoding="utf-8"
+    )
+
+
+def _classification() -> dict:
+    return {"macro_f1": 0.9, "mcc": 0.8, "false_positive_rate": 0.1, "recall": 0.95}
+
+
+def _task_metrics() -> dict:
+    return {
+        "peak_presence": {"classification": _classification()},
+        "peak_presence_metadata": {"classification": _classification()},
+        "scientific_qc": {"exact_match_rate": 0.9},
+        "peak_grounding": {"grounding": {"mean_bbox_iou_all": 0.5, "iou_at_0_5_rate_all": 0.5}},
+    }
+
+
+def _rows(
+    label: str, *, drift: str | None = None, grounding_groups: int = 11
+) -> list[dict]:
+    rows: list[dict] = []
+    for group in range(11):
+        for language in ("en", "zh-CN"):
+            asset = f"asset-{group}"
+            for task in ("peak_presence", "peak_presence_metadata"):
+                rows.append({"schema_version": BILINGUAL_EVALUATION_RECORD_SCHEMA, "instruction_id": f"{asset}-{language}-{task}", "pair_id": f"{asset}-{task}", "asset_id": asset, "group_id": f"group-{group}", "task": task, "language": language, "target_peak_present": True, "predicted_peak_present": True, "classification_score": 1.0, "schema_valid": True, "exact_match": True})
+            rows.append({"schema_version": BILINGUAL_EVALUATION_RECORD_SCHEMA, "instruction_id": f"{asset}-{language}-scientific_qc", "pair_id": f"{asset}-scientific_qc", "asset_id": asset, "group_id": f"group-{group}", "task": "scientific_qc", "language": language, "schema_valid": True, "exact_match": True, "predicted_qc_state": "pass", "predicted_reason": "ok"})
+            if group >= grounding_groups:
+                continue
+            expected = [10.0 + group * 10.0, 0.0, 20.0 + group * 10.0, 20.0]
+            if label == "c0":
+                predicted = [0.0, 0.0, 5.0, 20.0]
+            elif label == "c1":
+                predicted = expected if group != 0 else [11.0, 0.0, 21.0, 20.0]
+            else:
+                predicted = expected if group != 2 else [15.0, 0.0, 25.0, 20.0]
+            iou = 1.0 if predicted == expected else (0.8181818181818182 if label == "c1" else 0.3333333333333333)
+            if drift == "language" and language == "zh-CN":
+                asset = "different"
+            rows.append({"schema_version": BILINGUAL_EVALUATION_RECORD_SCHEMA, "instruction_id": f"asset-{group}-{language}-peak_grounding", "pair_id": f"asset-{group}-peak_grounding", "asset_id": asset, "group_id": f"group-{group}", "task": "peak_grounding", "language": language, "target_peak_present": True, "image_width": 100, "image_height": 20, "expected_bbox_2d": expected, "predicted_bbox_2d": predicted, "bbox_iou": iou, "iou_at_0_5": iou >= 0.5, "schema_valid": True, "exact_match": predicted == expected})
+    return rows
+
+
+def _run(
+    root: Path,
+    label: str,
+    *,
+    drift: str | None = None,
+    grounding_groups: int = 11,
+) -> Path:
+    directory = root / label
+    directory.mkdir()
+    rows = _rows(label, drift=drift, grounding_groups=grounding_groups)
+    records = directory / "evaluation_records.jsonl"
+    records.write_text("".join(json.dumps(row, sort_keys=True) + "\n" for row in rows), encoding="utf-8")
+    report = {
+        "schema_version": BILINGUAL_EVALUATION_REPORT_SCHEMA,
+        "development_comparison_eligible": True,
+        "final_benchmark_eligible": False,
+        "internal_test_accessed": False,
+        "prediction_generation_provenance_verified": True,
+        "counts": {"predictions": len(rows), "valid_json": len(rows)},
+        "metrics": _task_metrics(),
+        "metrics_by_language": {"en": _task_metrics(), "zh-CN": _task_metrics()},
+        "artifacts": {"evaluation_records": {"path": records.name, "sha256": sha256_file(records), "records": len(rows)}},
+    }
+    _write_json(directory / "qwen_evaluation_report.json", report)
+    _manifest(directory, "qwen_evaluation_report.json", "evaluation_records.jsonl")
+    return directory
+
+
+def _metadata(path: Path, *, grounding_groups: int = 11) -> str:
+    rows = []
+    for group in range(grounding_groups):
+        rows.append({"task": "peak_grounding", "pair_id": f"asset-{group}-peak_grounding", "asset_id": f"asset-{group}", "group_id": f"group-{group}", "raw_max": 10.0 * (group + 1), "roi_window_minutes": [1.0, 3.0]})
+    path.write_text("".join(json.dumps(row, sort_keys=True) + "\n" for row in rows), encoding="utf-8")
+    return sha256_file(path)
+
+
+def _metadata_sources(root: Path) -> tuple[Path, str, Path, str]:
+    dataset = root / "dataset"
+    fusion = root / "fusion"
+    (dataset / "validation").mkdir(parents=True)
+    fusion.mkdir()
+    examples = []
+    links = []
+    for group in range(11):
+        asset_id = f"asset-{group}"
+        pair_id = f"{asset_id}-peak_grounding"
+        examples.append(
+            {
+                "asset_id": asset_id,
+                "group_id": f"group-{group}",
+                "metadata": {
+                    "log1p_raw_maximum": math.log1p(10.0 * (group + 1)),
+                    "roi_window_minutes": [1.0, 3.0],
+                },
+            }
+        )
+        for language in ("en", "zh-CN"):
+            links.append(
+                {
+                    "task": "peak_grounding",
+                    "language": language,
+                    "pair_id": pair_id,
+                    "asset_id": asset_id,
+                    "group_id": f"group-{group}",
+                }
+            )
+    examples_path = dataset / "validation" / "examples.jsonl"
+    links_path = fusion / "validation_xic_links.jsonl"
+    examples_path.write_text(
+        "".join(json.dumps(row, sort_keys=True) + "\n" for row in examples),
+        encoding="utf-8",
+    )
+    links_path.write_text(
+        "".join(json.dumps(row, sort_keys=True) + "\n" for row in links),
+        encoding="utf-8",
+    )
+    dataset_report = {
+        "schema_version": DATASET_SCHEMA,
+        "splits": ["train", "validation"],
+        "internal_test_accessed": False,
+        "artifacts": {
+            "validation_examples": {
+                "path": "validation/examples.jsonl",
+                "sha256": sha256_file(examples_path),
+                "records": len(examples),
+            }
+        },
+    }
+    fusion_report = {
+        "internal_test_accessed": False,
+        "artifacts": {
+            "validation_xic_links": {
+                "path": links_path.name,
+                "sha256": sha256_file(links_path),
+                "records": len(links),
+            }
+        },
+    }
+    dataset_report_path = dataset / "dataset_report.json"
+    fusion_report_path = fusion / "fusion_bundle_report.json"
+    _write_json(dataset_report_path, dataset_report)
+    _write_json(fusion_report_path, fusion_report)
+    return (
+        dataset,
+        sha256_file(dataset_report_path),
+        fusion,
+        sha256_file(fusion_report_path),
+    )
+
+
+class LocalizationAnalysisTests(unittest.TestCase):
+    def _build(self, directory: Path, **overrides: object):
+        directory.mkdir(parents=True, exist_ok=True)
+        metadata = directory / "metadata.jsonl"
+        digest = _metadata(metadata)
+        kwargs = {"c0_evaluation_root": _run(directory, "c0"), "c1_evaluation_root": _run(directory, "c1"), "rl_evaluation_root": _run(directory, "rl"), "validation_metadata_path": metadata, "expected_validation_metadata_sha256": digest, "output_dir": directory / "analysis"}
+        kwargs.update(overrides)
+        return analyze_localization(**kwargs)
+
+    def test_positive_metrics_threshold_equality_and_seconds(self) -> None:
+        row = {"expected_bbox_2d": [10.0, 0.0, 20.0, 10.0], "predicted_bbox_2d": [10.0, 0.0, 20.0, 10.0], "bbox_iou": 0.5, "schema_valid": True, "image_width": 100, "roi_window_minutes": [1.0, 3.0]}
+        metrics = _localization_metrics([row])
+        self.assertEqual(metrics["iou_at_0_5"], 1.0)
+        self.assertEqual(metrics["iou_at_0_75"], 0.0)
+        self.assertEqual(metrics["start_error_pixels"], 0.0)
+        self.assertEqual(metrics["start_error_seconds"], 0.0)
+
+    def test_builds_answer_free_hash_bound_localization_metadata(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            dataset, dataset_sha, fusion, fusion_sha = _metadata_sources(root)
+            result = build_localization_metadata(
+                dataset_root=dataset,
+                expected_dataset_report_sha256=dataset_sha,
+                fusion_bundle_root=fusion,
+                expected_fusion_bundle_report_sha256=fusion_sha,
+                output_dir=root / "metadata",
+            )
+            report = json.loads(result.report_path.read_text(encoding="utf-8"))
+            rows = [
+                json.loads(line)
+                for line in result.metadata_path.read_text(encoding="utf-8").splitlines()
+            ]
+            self.assertEqual(report["schema_version"], METADATA_REPORT_SCHEMA)
+            self.assertEqual(
+                report["counts"],
+                {
+                    "records": 11,
+                    "validation_source_groups": 11,
+                    "grounding_source_groups": 11,
+                },
+            )
+            self.assertEqual(report["contracts"]["validation_answers_opened"], False)
+            self.assertEqual(report["contracts"]["internal_test_accessed"], False)
+            self.assertEqual(len(rows), 11)
+            self.assertTrue(all(row["schema_version"] == METADATA_SCHEMA for row in rows))
+            self.assertAlmostEqual(rows[0]["raw_max"], 10.0)
+            self.assertEqual(rows[0]["roi_window_minutes"], [1.0, 3.0])
+            _manifest_entries = result.manifest_path.read_text(encoding="utf-8")
+            self.assertIn("validation_localization_metadata.jsonl", _manifest_entries)
+            self.assertIn("validation_localization_metadata_report.json", _manifest_entries)
+
+    def test_localization_metadata_rejects_hash_and_bilingual_drift(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            dataset, dataset_sha, fusion, fusion_sha = _metadata_sources(root)
+            with self.assertRaisesRegex(ValueError, "Dataset report drift"):
+                build_localization_metadata(
+                    dataset_root=dataset,
+                    expected_dataset_report_sha256="0" * 64,
+                    fusion_bundle_root=fusion,
+                    expected_fusion_bundle_report_sha256=fusion_sha,
+                    output_dir=root / "bad-hash",
+                )
+            links_path = fusion / "validation_xic_links.jsonl"
+            links = [json.loads(line) for line in links_path.read_text(encoding="utf-8").splitlines()]
+            links[1]["asset_id"] = "asset-1"
+            links[1]["group_id"] = "group-1"
+            links_path.write_text(
+                "".join(json.dumps(row, sort_keys=True) + "\n" for row in links),
+                encoding="utf-8",
+            )
+            fusion_report_path = fusion / "fusion_bundle_report.json"
+            fusion_report = json.loads(fusion_report_path.read_text(encoding="utf-8"))
+            fusion_report["artifacts"]["validation_xic_links"]["sha256"] = sha256_file(links_path)
+            _write_json(fusion_report_path, fusion_report)
+            with self.assertRaisesRegex(ValueError, "Bilingual localization metadata drift"):
+                build_localization_metadata(
+                    dataset_root=dataset,
+                    expected_dataset_report_sha256=dataset_sha,
+                    fusion_bundle_root=fusion,
+                    expected_fusion_bundle_report_sha256=sha256_file(fusion_report_path),
+                    output_dir=root / "drift",
+                )
+
+    def test_localization_metadata_allows_grounding_to_cover_a_strict_group_subset(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            dataset, dataset_sha, fusion, _ = _metadata_sources(root)
+            links_path = fusion / "validation_xic_links.jsonl"
+            links = [json.loads(line) for line in links_path.read_text(encoding="utf-8").splitlines()]
+            for link in links:
+                if link["group_id"] == "group-10":
+                    link["task"] = "peak_presence"
+                    link["pair_id"] = "asset-10-peak_presence"
+            links_path.write_text(
+                "".join(json.dumps(row, sort_keys=True) + "\n" for row in links),
+                encoding="utf-8",
+            )
+            fusion_report_path = fusion / "fusion_bundle_report.json"
+            fusion_report = json.loads(fusion_report_path.read_text(encoding="utf-8"))
+            fusion_report["artifacts"]["validation_xic_links"]["sha256"] = sha256_file(links_path)
+            _write_json(fusion_report_path, fusion_report)
+            result = build_localization_metadata(
+                dataset_root=dataset,
+                expected_dataset_report_sha256=dataset_sha,
+                fusion_bundle_root=fusion,
+                expected_fusion_bundle_report_sha256=sha256_file(fusion_report_path),
+                output_dir=root / "grounding-subset",
+            )
+            report = json.loads(result.report_path.read_text(encoding="utf-8"))
+            self.assertEqual(report["counts"]["validation_source_groups"], 11)
+            self.assertEqual(report["counts"]["grounding_source_groups"], 10)
+
+    def test_localization_metadata_accepts_only_safe_legacy_dataset_scope(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            dataset, _, fusion, fusion_sha = _metadata_sources(root)
+            report_path = dataset / "dataset_report.json"
+            report = json.loads(report_path.read_text(encoding="utf-8"))
+            del report["internal_test_accessed"]
+            _write_json(report_path, report)
+            result = build_localization_metadata(
+                dataset_root=dataset,
+                expected_dataset_report_sha256=sha256_file(report_path),
+                fusion_bundle_root=fusion,
+                expected_fusion_bundle_report_sha256=fusion_sha,
+                output_dir=root / "legacy-safe",
+            )
+            self.assertTrue(result.metadata_path.is_file())
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            dataset, _, fusion, fusion_sha = _metadata_sources(root)
+            report_path = dataset / "dataset_report.json"
+            report = json.loads(report_path.read_text(encoding="utf-8"))
+            report["internal_test_accessed"] = True
+            _write_json(report_path, report)
+            with self.assertRaisesRegex(ValueError, "Dataset used internal test"):
+                build_localization_metadata(
+                    dataset_root=dataset,
+                    expected_dataset_report_sha256=sha256_file(report_path),
+                    fusion_bundle_root=fusion,
+                    expected_fusion_bundle_report_sha256=fusion_sha,
+                    output_dir=root / "explicit-protected",
+                )
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            dataset, _, fusion, fusion_sha = _metadata_sources(root)
+            report_path = dataset / "dataset_report.json"
+            report = json.loads(report_path.read_text(encoding="utf-8"))
+            del report["internal_test_accessed"]
+            report["artifacts"]["protected"] = {
+                "path": "internal-test/examples.jsonl",
+                "sha256": "0" * 64,
+            }
+            _write_json(report_path, report)
+            with self.assertRaisesRegex(ValueError, "Legacy Dataset report references internal test"):
+                build_localization_metadata(
+                    dataset_root=dataset,
+                    expected_dataset_report_sha256=sha256_file(report_path),
+                    fusion_bundle_root=fusion,
+                    expected_fusion_bundle_report_sha256=fusion_sha,
+                    output_dir=root / "legacy-protected",
+                )
+
+    def test_fixed_tertiles_are_shared_and_ties_are_low(self) -> None:
+        rows = []
+        for raw_max in (1.0, 1.0, 1.0, 9.0, 9.0, 20.0):
+            rows.append({"expected_bbox_2d": [10.0, 0.0, 20.0, 10.0], "image_width": 100, "raw_max": raw_max})
+        boundaries = _tertile_boundaries(rows)
+        self.assertEqual(_stratum(rows[0], "log1p_raw_max", boundaries["log1p_raw_max"]), "low")
+        self.assertIn("tie_policy", boundaries["true_peak_width_pixels"])
+
+    def test_positive_filter_excludes_negative_grounding_and_scopes_language(self) -> None:
+        base = {"task": "peak_grounding", "expected_bbox_2d": [1.0, 0.0, 2.0, 1.0]}
+        rows = [
+            {**base, "instruction_id": "en-positive", "language": "en", "target_peak_present": True},
+            {**base, "instruction_id": "zh-negative", "language": "zh-CN", "target_peak_present": False},
+            {**base, "instruction_id": "zh-schema-v2-positive", "language": "zh-CN"},
+        ]
+        self.assertEqual(
+            [row["instruction_id"] for row in _positive_grounding(rows, "overall")],
+            ["en-positive", "zh-schema-v2-positive"],
+        )
+        self.assertEqual([row["instruction_id"] for row in _positive_grounding(rows, "en")], ["en-positive"])
+
+    def test_positive_filter_rejects_ambiguous_grounding_truth(self) -> None:
+        with self.assertRaisesRegex(ValueError, "Expected grounding bbox"):
+            _positive_grounding(
+                [
+                    {
+                        "task": "peak_grounding",
+                        "instruction_id": "missing-truth",
+                        "language": "en",
+                    }
+                ],
+                "overall",
+            )
+        with self.assertRaisesRegex(ValueError, "must be boolean"):
+            _positive_grounding(
+                [
+                    {
+                        "task": "peak_grounding",
+                        "instruction_id": "bad-explicit-truth",
+                        "language": "en",
+                        "target_peak_present": 1,
+                        "expected_bbox_2d": [1.0, 0.0, 2.0, 1.0],
+                    }
+                ],
+                "overall",
+            )
+
+    def test_failures_are_deterministic_and_limited(self) -> None:
+        baseline = []
+        rl = []
+        for index in range(25):
+            row = {"instruction_id": f"id-{index}", "pair_id": f"pair-{index}", "asset_id": "asset", "group_id": "group", "language": "en", "expected_bbox_2d": [1.0, 0.0, 5.0, 4.0], "image_width": 10, "predicted_bbox_2d": [1.0, 0.0, 5.0, 4.0], "bbox_iou": 1.0, "schema_valid": True}
+            baseline.append(row)
+            rl.append({**row, "predicted_bbox_2d": [6.0, 0.0, 9.0, 4.0], "bbox_iou": 0.0})
+        first = _failures(baseline, rl, seed=29)
+        self.assertEqual(first, _failures(baseline, rl, seed=29))
+        self.assertEqual(len(first), 20)
+
+    def test_builds_scoped_hash_bound_analysis_and_deterministic_failures(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            result = self._build(root)
+            report = json.loads(result.report_path.read_text(encoding="utf-8"))
+            self.assertEqual(report["schema_version"], REPORT_SCHEMA)
+            self.assertEqual(report["paired_group_bootstrap"]["iterations"], 10_000)
+            self.assertEqual(report["localization"]["rl"]["en"]["positive_grounding_rows"], 11)
+            self.assertEqual(report["paired_group_bootstrap"]["comparisons"]["rl_minus_c1"]["overall"]["source_groups"], 11)
+            self.assertLessEqual(report["failure_cases"]["records"], 20)
+            self.assertFalse(report["internal_test_accessed"])
+            self.assertIn("localization_failure_cases.jsonl", result.manifest_path.read_text(encoding="utf-8"))
+
+    def test_analysis_uses_hash_bound_grounding_group_support(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            metadata = root / "metadata.jsonl"
+            digest = _metadata(metadata, grounding_groups=10)
+            result = analyze_localization(
+                c0_evaluation_root=_run(root, "c0", grounding_groups=10),
+                c1_evaluation_root=_run(root, "c1", grounding_groups=10),
+                rl_evaluation_root=_run(root, "rl", grounding_groups=10),
+                validation_metadata_path=metadata,
+                expected_validation_metadata_sha256=digest,
+                output_dir=root / "analysis",
+            )
+            report = json.loads(result.report_path.read_text(encoding="utf-8"))
+            self.assertEqual(report["validation_metadata"]["grounding_source_groups"], 10)
+            for comparison in ("rl_minus_c0", "rl_minus_c1"):
+                for scope in ("overall", "en", "zh-CN"):
+                    self.assertEqual(
+                        report["paired_group_bootstrap"]["comparisons"][comparison][scope][
+                            "source_groups"
+                        ],
+                        10,
+                    )
+
+    def test_rejects_metadata_hash_and_identity_drift(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            metadata = root / "metadata.jsonl"
+            digest = _metadata(metadata)
+            with self.assertRaisesRegex(ValueError, "hash mismatch"):
+                analyze_localization(c0_evaluation_root=_run(root, "c0"), c1_evaluation_root=_run(root, "c1"), rl_evaluation_root=_run(root, "rl"), validation_metadata_path=metadata, expected_validation_metadata_sha256="0" * 64, output_dir=root / "analysis")
+            root2 = root / "drift"
+            root2.mkdir()
+            metadata2 = root2 / "metadata.jsonl"
+            digest2 = _metadata(metadata2)
+            with self.assertRaisesRegex(ValueError, "identity drift"):
+                analyze_localization(c0_evaluation_root=_run(root2, "c0"), c1_evaluation_root=_run(root2, "c1"), rl_evaluation_root=_run(root2, "rl", drift="language"), validation_metadata_path=metadata2, expected_validation_metadata_sha256=digest2, output_dir=root2 / "analysis")
+
+    def test_paired_bootstrap_is_reproducible(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            metadata = root / "metadata.jsonl"
+            digest = _metadata(metadata)
+            c0, c1, rl = _run(root, "c0"), _run(root, "c1"), _run(root, "rl")
+            first = analyze_localization(c0_evaluation_root=c0, c1_evaluation_root=c1, rl_evaluation_root=rl, validation_metadata_path=metadata, expected_validation_metadata_sha256=digest, output_dir=root / "one")
+            second = analyze_localization(c0_evaluation_root=c0, c1_evaluation_root=c1, rl_evaluation_root=rl, validation_metadata_path=metadata, expected_validation_metadata_sha256=digest, output_dir=root / "two")
+            one = json.loads(first.report_path.read_text(encoding="utf-8"))
+            two = json.loads(second.report_path.read_text(encoding="utf-8"))
+            self.assertEqual(one["paired_group_bootstrap"], two["paired_group_bootstrap"])
+            self.assertEqual(first.failure_cases_path.read_bytes(), second.failure_cases_path.read_bytes())
+
+    def test_rejects_protected_path_and_wrong_bootstrap_scope(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            metadata = root / "metadata.jsonl"
+            digest = _metadata(metadata)
+            protected = root / "internal-test"
+            protected.mkdir()
+            with self.assertRaisesRegex(ValueError, "internal test"):
+                analyze_localization(c0_evaluation_root=protected, c1_evaluation_root=_run(root, "c1"), rl_evaluation_root=_run(root, "rl"), validation_metadata_path=metadata, expected_validation_metadata_sha256=digest, output_dir=root / "analysis")
+            with self.assertRaisesRegex(ValueError, "exactly 10,000"):
+                self._build(root / "iterations", bootstrap_iterations=100)
+
+
+if __name__ == "__main__":
+    unittest.main()
