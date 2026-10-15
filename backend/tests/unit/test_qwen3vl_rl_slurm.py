@@ -113,6 +113,16 @@ class RlSlurmContractTests(unittest.TestCase):
         self.assertEqual(begin.command, "begin-validation")
         self.assertEqual(complete.command, "complete-validation")
 
+    def test_seed_replication_is_selection_only(self) -> None:
+        replication = self._script("coder_rl_seed_replication.sbatch")
+        self.assertIn("SELECTION_SET_EVALUATION_ONLY=true", replication)
+        self.assertIn("VALIDATION_PROMPTS_OPENED=false", replication)
+        self.assertIn("VALIDATION_ANSWERS_OPENED=false", replication)
+        self.assertIn("INTERNAL_TEST_ACCESSED=false", replication)
+        self.assertIn("rl_seed_replication_cli", replication)
+        self.assertNotIn("BIOCODER_VALIDATION_ROOT", replication)
+        self.assertNotIn("BIOCODER_INTERNAL_TEST", replication)
+
 
 if __name__ == "__main__":
     unittest.main()
