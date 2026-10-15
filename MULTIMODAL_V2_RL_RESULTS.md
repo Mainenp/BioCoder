@@ -113,7 +113,7 @@
 
 边界秒误差只在冻结元数据提供 ROI 时间窗时计算；正式 JSON 报告保留像素和秒两个字段以及各自有效样本数，不能把缺失秒尺度的记录伪装成 0。正式分析 JSON 中 `seconds_error_rows=2818`，因此本次不是缺失秒尺度：C1 的起点/终点 MAE 为 1.6002/3.8559 秒，RL 为 1.4461/3.4402 秒；按起止边界等权合并，C1 与 RL 的 boundary MAE 分别为 2.7280 和 2.4431 秒。
 
-SequencePeakNet 约 2 秒的边界误差使用相同的“起止边界绝对误差合并均值”定义，因而可以作秒数量级的描述性参照；但该数值来自 v1 密封 internal-test，而上表来自 v2 development validation，两者不是同一切分，不能作为同场 head-to-head 排名或显著性结论。
+SequencePeakNet 的 mean interval IoU `0.7846` 和 mean boundary error `1.9940` 秒来自同一份 validation 切分（1,815 个 ROI、11 个 source group），边界误差也使用相同的“起止绝对误差拼接后取均值”定义，因此可以作同切分、同定义的描述性参照。不过，SequencePeakNet 曾按 validation loss 选择 epoch 17，其 validation 分数存在乐观偏差；同时两种模型之间没有执行配对 source-group bootstrap，不能把这组数值解释为无偏的 head-to-head 排名或显著性结论。
 
 ## 全部 validation 候选（透明报告，不用于事后选模）
 
