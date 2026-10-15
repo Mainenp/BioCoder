@@ -66,7 +66,10 @@ BioCoder distinguishes retrieved facts, model inference, conflicting evidence, a
 | Data flywheel | Feedback filtering, bad-case analysis, and training dataset construction |
 | Model registry | Candidate model tracking and controlled promotion |
 
-The repository includes SFT and DPO entry points and a GRPO reward scaffold. Training completion does not imply deployment approval: candidate models must pass regression evaluation and human review before promotion.
+The repository includes SFT and DPO entry points plus a completed, separately evaluated
+localization-first GRPO experiment. Training completion does not imply deployment approval:
+candidate models must pass regression evaluation, agent-level integration tests, and human review
+before promotion.
 
 ## Scientific multimodal chromatography
 
@@ -77,10 +80,11 @@ interventions, multi-seed ablations, a once-only sealed benchmark, and hash-boun
 The frozen image+XIC model reached Macro-F1 `0.9319` (English) and `0.9285` (Chinese); the
 language-neutral SequencePeakNet specialist reached Macro-F1 `0.9668`.
 
-The model benchmark is complete, but interactive LangGraph/FastAPI tool serving and the separate
-agent promotion suite remain future product gates. Model metrics are not presented as agent
-metrics, and reinforcement learning is reserved for a separately evaluated v2 rather than tuning
-against the sealed v1 test.
+The v1 model benchmark and the validation-only v2 GRPO experiment are complete, but interactive
+LangGraph/FastAPI tool serving and the separate agent promotion suite remain future product gates.
+Model metrics are not presented as agent metrics. The v2 experiment was selected without using the
+v1 sealed test, opened validation only once after hash-sealed selection, and did not reopen the v1
+internal-test split.
 
 The post-seal V1.1 validation controls are also complete. They add three-seed uncertainty,
 1/4/8-token and XIC-intervention evidence, an XIC-only current-sample ablation, and a frozen
@@ -89,6 +93,8 @@ SequencePeakNet-in-prompt baseline without reopening the internal test.
 - [Sealed benchmark results and evidence identity](MULTIMODAL_RESULTS.md)
 - [V1.1 validation-only results and evidence identity](MULTIMODAL_V11_RESULTS.md)
 - [V1.1 controlled-experiment protocol](MULTIMODAL_V11_EXPERIMENTS.md)
+- [V2 localization-first GRPO protocol](MULTIMODAL_V2_RL_PLAN.md)
+- [V2 GRPO results and evidence identity](MULTIMODAL_V2_RL_RESULTS.md)
 - [Multimodal architecture and implementation roadmap](MULTIMODAL_ROADMAP.md)
 - [Verification, leakage-control, and ablation plan](MULTIMODAL_TEST_PLAN.md)
 
