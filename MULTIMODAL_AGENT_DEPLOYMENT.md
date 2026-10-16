@@ -53,6 +53,11 @@ GPU 环境需要安装 `backend` 的 `training` optional dependencies（Transfor
 3. `image_xic` 部署还需要一张 ROI 图像附件；`xic_only` 部署不读取图像像素；
 4. metadata/QC 任务还需 `component`、`channel`、`q1`、`q3`、`expected_rt_minutes`。
 
+`image_width` 和 `image_height` 描述输出边界框使用的 ROI 像素坐标画布，不是 XIC
+数组形状。标准 BioCoder ROI 为 `400×300`，而 projector 输入是独立的 160 个 XIC
+采样点；标准流水线的 `xic_only` 请求因此应传 `image_width=400`、
+`image_height=300`，不能把 XIC 长度 160 当成图像宽度。
+
 Agent 会自动调用 `analyze_chromatogram`，返回结构化 JSON、deployment ID 与 deployment manifest SHA-256。峰定位输出为原图像素坐标 `[x1,y1,x2,y2]`，不是临床诊断结果。
 
 ## 不包含的内容

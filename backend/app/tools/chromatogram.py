@@ -58,8 +58,19 @@ class ChromatogramAnalysisInput(BaseModel):
         pattern=r"^[a-f0-9]{32}$",
         description="Image attachment ID shown in the current user message.",
     )
-    image_width: int = Field(gt=0, le=100_000)
-    image_height: int = Field(gt=0, le=100_000)
+    image_width: int = Field(
+        gt=0,
+        le=100_000,
+        description=(
+            "Source ROI coordinate-canvas width. Standard BioCoder ROIs use 400; "
+            "this is independent of the 160 XIC samples."
+        ),
+    )
+    image_height: int = Field(
+        gt=0,
+        le=100_000,
+        description="Source ROI coordinate-canvas height. Standard BioCoder ROIs use 300.",
+    )
     metadata: dict[str, Any] | None = Field(
         default=None,
         description=("For metadata/QC tasks: component, channel, q1, q3, expected_rt_minutes."),
