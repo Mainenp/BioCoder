@@ -111,6 +111,17 @@ async def lifespan(_: FastAPI):
     attachment_store.initialize()
     auth_store.initialize()
     conversation_store.initialize()
+    if settings.chromatogram_tool_enabled:
+        if settings.chromatogram_deployment_manifest_path is None:
+            raise RuntimeError("Chromatogram tool is enabled without a deployment manifest")
+        from multimodal_science.qwen3vl.deployment_runtime import (
+            verify_deployment_manifest,
+        )
+
+        await asyncio.to_thread(
+            verify_deployment_manifest,
+            settings.chromatogram_deployment_manifest_path,
+        )
     yield
 
 
@@ -205,6 +216,7 @@ def health() -> HealthResponse:
         attachment_formats=sorted(SUPPORTED_ATTACHMENT_SUFFIXES),
         attachment_max_files=settings.attachment_max_files,
         attachment_max_file_bytes=settings.attachment_max_file_bytes,
+        chromatogram_tool_enabled=settings.chromatogram_tool_enabled,
     )
 
 
