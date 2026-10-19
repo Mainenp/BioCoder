@@ -1,4 +1,5 @@
 from fastapi.testclient import TestClient
+from types import SimpleNamespace
 
 import app.main as main_module
 from app.rag.store import KnowledgeStore
@@ -95,6 +96,107 @@ def test_knowledge_status(authenticated_client) -> None:
 def test_chat_validates_empty_input(authenticated_client) -> None:
     response = authenticated_client.post("/api/chat", json={"message": ""})
     assert response.status_code == 422
+
+
+def test_chromatogram_api_requires_login() -> None:
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/chromatogram/analyze",
+            json={
+                "task": "peak_grounding",
+                "language": "zh-CN",
+                "xic_signal": [0.5] * 160,
+                "image_width": 400,
+                "image_height": 300,
+            },
+        )
+    assert response.status_code == 401
+
+
+def test_chromatogram_api_preserves_structured_xic_without_llm(
+    monkeypatch, authenticated_client
+) -> None:
+    class FakeRuntime:
+        def __init__(self) -> None:
+            self.deployment = SimpleNamespace(input_modality="xic_only")
+            self.calls: list[dict] = []
+
+        def analyze(self, **kwargs):
+            self.calls.append(kwargs)
+            if len(kwargs["xic_signal"]) != 160:
+                raise ValueError("XIC signal length does not match deployment")
+            return {
+                "deployment_id": "chrompeak-test",
+                "deployment_manifest_sha256": "a" * 64,
+                "input_modality": "xic_only",
+                "task": kwargs["task"],
+                "language": kwargs["language"],
+                "result": {"bbox_2d": [175, 0, 235, 300]},
+                "raw_response": '{"bbox_2d":[175,0,235,300]}',
+                "runtime": {"visual_tower_guard_installed": True},
+            }
+
+    runtime = FakeRuntime()
+    signal = [index / 159 for index in range(160)]
+    monkeypatch.setattr(main_module.settings, "chromatogram_tool_enabled", True)
+    monkeypatch.setattr(
+        main_module.settings,
+        "chromatogram_deployment_manifest_path",
+        main_module.settings.data_dir / "deployment.json",
+    )
+    monkeypatch.setattr(main_module, "get_chromatogram_runtime", lambda _: runtime)
+
+    response = authenticated_client.post(
+        "/api/chromatogram/analyze",
+        json={
+            "task": "peak_grounding",
+            "language": "zh-CN",
+            "xic_available": True,
+            "xic_signal": signal,
+            "image_width": 400,
+            "image_height": 300,
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["result"] == {"bbox_2d": [175, 0, 235, 300]}
+    assert len(runtime.calls) == 1
+    assert runtime.calls[0]["xic_signal"] == signal
+    assert runtime.calls[0]["image_path"] is None
+
+
+def test_chromatogram_api_reports_exact_deployment_length_error(
+    monkeypatch, authenticated_client
+) -> None:
+    class StrictRuntime:
+        deployment = SimpleNamespace(input_modality="xic_only")
+
+        def analyze(self, **kwargs):
+            if len(kwargs["xic_signal"]) != 160:
+                raise ValueError("XIC signal length does not match deployment")
+            raise AssertionError("Expected a length error")
+
+    monkeypatch.setattr(main_module.settings, "chromatogram_tool_enabled", True)
+    monkeypatch.setattr(
+        main_module.settings,
+        "chromatogram_deployment_manifest_path",
+        main_module.settings.data_dir / "deployment.json",
+    )
+    monkeypatch.setattr(main_module, "get_chromatogram_runtime", lambda _: StrictRuntime())
+
+    response = authenticated_client.post(
+        "/api/chromatogram/analyze",
+        json={
+            "task": "peak_grounding",
+            "language": "zh-CN",
+            "xic_signal": [0.5] * 159,
+            "image_width": 400,
+            "image_height": 300,
+        },
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "XIC signal length does not match deployment"
 
 
 def test_uploads_a_validated_chat_attachment(

@@ -23,6 +23,8 @@ import type {
   Attachment,
   AuthConfig,
   AuthUser,
+  ChromatogramAnalysisRequest,
+  ChromatogramTask,
   ConversationSummary,
   Health,
   KnowledgeStatus,
@@ -49,11 +51,68 @@ const viewTitles: Record<AppView, { eyebrow: string; title: string }> = {
 }
 
 const fallbackAttachmentFormats = ['.png', '.jpg', '.jpeg', '.webp', '.gif', '.pdf', '.docx', '.txt', '.md', '.json']
+const chromatogramTasks = new Set<ChromatogramTask>([
+  'peak_presence',
+  'peak_presence_metadata',
+  'peak_grounding',
+  'scientific_qc',
+])
 
 function formatBytes(value: number) {
   if (value < 1024) return `${value} B`
   if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`
   return `${(value / (1024 * 1024)).toFixed(1)} MB`
+}
+
+function asChromatogramRequest(value: unknown): ChromatogramAnalysisRequest | undefined {
+  if (!value || typeof value !== 'object') return undefined
+  const record = value as Record<string, unknown>
+  if (typeof record.task !== 'string' || !chromatogramTasks.has(record.task as ChromatogramTask)) {
+    return undefined
+  }
+  if (record.language !== 'en' && record.language !== 'zh-CN') {
+    throw new Error('色谱 JSON 的 language 必须是 en 或 zh-CN。')
+  }
+  if (!Array.isArray(record.xic_signal)) throw new Error('色谱 JSON 缺少 xic_signal 数组。')
+  const signal = record.xic_signal
+  if (signal.some((item) => typeof item !== 'number' || !Number.isFinite(item))) {
+    throw new Error('xic_signal 必须只包含有限数值。')
+  }
+  if (signal.some((item) => item < 0 || item > 1)) {
+    throw new Error('xic_signal 必须归一化到 [0,1]。')
+  }
+  if (record.xic_available !== undefined && typeof record.xic_available !== 'boolean') {
+    throw new Error('色谱 JSON 的 xic_available 必须是布尔值。')
+  }
+  if (!Number.isInteger(record.image_width) || Number(record.image_width) <= 0) {
+    throw new Error('色谱 JSON 的 image_width 必须是正整数。')
+  }
+  if (!Number.isInteger(record.image_height) || Number(record.image_height) <= 0) {
+    throw new Error('色谱 JSON 的 image_height 必须是正整数。')
+  }
+  if (record.metadata != null && (typeof record.metadata !== 'object' || Array.isArray(record.metadata))) {
+    throw new Error('色谱 JSON 的 metadata 必须是对象。')
+  }
+  return {
+    task: record.task as ChromatogramTask,
+    language: record.language,
+    xic_signal: signal,
+    xic_available: record.xic_available === undefined ? true : record.xic_available,
+    image_width: Number(record.image_width),
+    image_height: Number(record.image_height),
+    metadata: (record.metadata as Record<string, unknown> | null | undefined) ?? null,
+  }
+}
+
+async function chromatogramRequestFromFiles(files: File[]) {
+  if (files.length !== 1 || !files[0].name.toLowerCase().endsWith('.json')) return undefined
+  let value: unknown
+  try {
+    value = JSON.parse(await files[0].text())
+  } catch {
+    return undefined
+  }
+  return asChromatogramRequest(value)
 }
 
 export default function App() {
@@ -116,6 +175,7 @@ export default function App() {
     setBusyStage(files.length ? 'uploading' : 'thinking')
     setActiveView('chat')
     try {
+      const chromatogramRequest = await chromatogramRequestFromFiles(files)
       const attachments: Attachment[] = []
       for (const file of files) attachments.push(await api.uploadAttachment(file))
       setInput('')
@@ -125,6 +185,24 @@ export default function App() {
         { id: crypto.randomUUID(), role: 'user', content: question, attachments },
       ])
       setBusyStage('thinking')
+      if (chromatogramRequest) {
+        if (!health?.chromatogram_tool_enabled) {
+          throw new Error('服务端尚未启用色谱分析工具。')
+        }
+        const result = await api.analyzeChromatogram(chromatogramRequest)
+        setMessages((current) => [
+          ...current,
+          {
+            id: crypto.randomUUID(),
+            role: 'assistant',
+            content: `冻结色谱模型返回：\n\n\`\`\`json\n${JSON.stringify(result, null, 2)}\n\`\`\``,
+            plan: ['验证结构化 XIC 输入', '调用冻结色谱模型', '返回原始结构化结果'],
+            tools: ['analyze_chromatogram'],
+          },
+        ])
+        refreshStatus()
+        return
+      }
       const result = await api.chat(question, threadId, attachments.map((item) => item.id))
       setThreadId(result.thread_id)
       setMessages((current) => [

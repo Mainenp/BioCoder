@@ -6,6 +6,7 @@ import re
 import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import Any
 
 from fastapi import Depends, FastAPI, File, HTTPException, Query, Request, Response, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
@@ -45,6 +46,11 @@ from app.services.auth import (
 from app.services.history import ConversationStore
 from app.services.llm import is_loopback_base_url
 from app.services.training import LocalSFTCoordinator, TrainingJobBusyError, TrainingJobState
+from app.tools.chromatogram import (
+    ChromatogramAnalysisInput,
+    execute_chromatogram_analysis,
+    get_chromatogram_runtime,
+)
 from biocoder.bad_cases.schema import BadCase
 from biocoder.bad_cases.store import BadCaseStore, should_create_bad_case
 from biocoder.memory.store import SemanticMemoryStore
@@ -218,6 +224,42 @@ def health() -> HealthResponse:
         attachment_max_file_bytes=settings.attachment_max_file_bytes,
         chromatogram_tool_enabled=settings.chromatogram_tool_enabled,
     )
+
+
+@app.post("/api/chromatogram/analyze", response_model=dict[str, Any])
+async def analyze_chromatogram(
+    payload: ChromatogramAnalysisInput,
+    user: AuthUser = Depends(require_user),
+) -> dict[str, Any]:
+    """Run frozen chromatography inference without LLM argument transcription."""
+
+    if not settings.chromatogram_tool_enabled:
+        raise HTTPException(status_code=503, detail="Chromatogram analysis is disabled")
+    manifest_path = settings.chromatogram_deployment_manifest_path
+    if manifest_path is None:
+        raise HTTPException(status_code=503, detail="Chromatogram deployment is not configured")
+    attachment_id = payload.image_attachment_id
+    if attachment_id and not auth_store.owns_resource("attachment", attachment_id, user.id):
+        raise HTTPException(status_code=404, detail="附件不存在或无权访问。")
+    try:
+        runtime = get_chromatogram_runtime(manifest_path)
+        authorized_ids = (attachment_id,) if attachment_id else ()
+        return await asyncio.to_thread(
+            execute_chromatogram_analysis,
+            payload,
+            runtime=runtime,
+            attachment_store=attachment_store,
+            authorized_attachment_ids=authorized_ids,
+        )
+    except AttachmentNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except (FileContentError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=f"Chromatogram runtime failed: {exc}") from exc
+    except Exception as exc:
+        log_event(logger, "chromatogram_analysis_failed", level=logging.ERROR, error=str(exc))
+        raise HTTPException(status_code=500, detail="Chromatogram analysis failed") from exc
 
 
 @app.post("/api/attachments", response_model=Attachment, status_code=201)
