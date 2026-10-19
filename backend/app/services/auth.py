@@ -101,7 +101,9 @@ class AuthStore:
     ) -> AuthUser:
         if not registration_enabled:
             raise RegistrationDisabledError("当前未开放新账号注册。")
-        if not expected_invite_code or not hmac.compare_digest(invite_code, expected_invite_code):
+        if expected_invite_code and not hmac.compare_digest(
+            invite_code, expected_invite_code
+        ):
             raise InvalidInviteError("邀请码无效，请确认后重试。")
         timestamp = _timestamp(_now())
         user_id = secrets.token_hex(16)
