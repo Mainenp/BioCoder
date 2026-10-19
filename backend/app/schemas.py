@@ -40,7 +40,7 @@ class LoginRequest(BaseModel):
 
 class RegisterRequest(LoginRequest):
     display_name: str = Field(min_length=2, max_length=40)
-    invite_code: str = Field(min_length=1, max_length=128)
+    invite_code: str = Field(default="", max_length=128)
 
     @field_validator("display_name")
     @classmethod

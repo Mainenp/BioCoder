@@ -22,6 +22,11 @@ export function AuthScreen({ config, onLogin, onRegister }: Props) {
   const [inviteCode, setInviteCode] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
+  const inviteRequired = config?.invite_required ?? true
+  const registrationEyebrow = inviteRequired ? 'INVITE ONLY' : 'OPEN SIGNUP'
+  const registrationDescription = inviteRequired
+    ? '注册需要管理员提供的邀请码。'
+    : '当前已开放注册，无需邀请码。'
 
   const requestSubject = encodeURIComponent('申请 BioCoder 邀请码')
   const requestBody = encodeURIComponent('您好，我希望申请 BioCoder 使用邀请码。\n\n申请人：\n用途：\n')
@@ -69,9 +74,9 @@ export function AuthScreen({ config, onLogin, onRegister }: Props) {
       <section className="auth-panel">
         <div className="auth-card">
           <div className="auth-card-head">
-            <span>{mode === 'login' ? 'WELCOME BACK' : 'INVITE ONLY'}</span>
+            <span>{mode === 'login' ? 'WELCOME BACK' : registrationEyebrow}</span>
             <h2>{mode === 'login' ? '登录研究空间' : '创建你的账号'}</h2>
-            <p>{mode === 'login' ? '继续查看你的对话、证据与研究进度。' : '注册需要管理员提供的邀请码。'}</p>
+            <p>{mode === 'login' ? '继续查看你的对话、证据与研究进度。' : registrationDescription}</p>
           </div>
 
           <div className="auth-tabs" role="tablist" aria-label="账号操作">
@@ -94,7 +99,7 @@ export function AuthScreen({ config, onLogin, onRegister }: Props) {
               <span>密码</span>
               <div><LockKeyhole size={17} /><input required minLength={8} maxLength={128} type="password" autoComplete={mode === 'login' ? 'current-password' : 'new-password'} value={password} onChange={(event) => setPassword(event.target.value)} placeholder="至少 8 个字符" /></div>
             </label>
-            {mode === 'register' && (
+            {mode === 'register' && inviteRequired && (
               <label>
                 <span>邀请码</span>
                 <div><KeyRound size={17} /><input required autoComplete="off" value={inviteCode} onChange={(event) => setInviteCode(event.target.value)} placeholder="输入管理员提供的邀请码" /></div>
@@ -108,7 +113,7 @@ export function AuthScreen({ config, onLogin, onRegister }: Props) {
             </button>
           </form>
 
-          {mode === 'register' && (
+          {mode === 'register' && inviteRequired && (
             <div className="invite-help">
               <Mail size={17} />
               <div><strong>还没有邀请码？</strong><span>请发送申请邮件给管理员，说明你的姓名与使用用途。</span></div>

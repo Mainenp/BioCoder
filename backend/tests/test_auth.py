@@ -50,3 +50,19 @@ def test_auth_store_enforces_invite_password_and_resource_ownership(tmp_path) ->
     assert store.owns_resource("attachment", "attachment-1", "someone-else") is False
     store.revoke_session(token)
     assert store.user_for_session(token) is None
+
+
+def test_auth_store_allows_open_registration_without_invite(tmp_path) -> None:
+    store = AuthStore(tmp_path / "auth.db")
+    store.initialize()
+
+    user = store.register(
+        email="open@example.com",
+        display_name="Open Researcher",
+        password="correct-horse-battery",
+        invite_code="",
+        expected_invite_code="",
+        registration_enabled=True,
+    )
+
+    assert user.email == "open@example.com"

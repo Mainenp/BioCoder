@@ -64,6 +64,27 @@ def test_register_me_and_logout(tmp_path, monkeypatch) -> None:
         assert client.get("/api/auth/me").status_code == 401
 
 
+def test_open_registration_does_not_require_invite_field(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(main_module, "auth_store", AuthStore(tmp_path / "auth.db"))
+    monkeypatch.setattr(main_module.settings, "auth_invite_code", "")
+    with TestClient(app) as client:
+        config = client.get("/api/auth/config")
+        assert config.status_code == 200
+        assert config.json()["invite_required"] is False
+
+        registered = client.post(
+            "/api/auth/register",
+            json={
+                "display_name": "Open Researcher",
+                "email": "open@example.com",
+                "password": "correct-horse-battery",
+            },
+        )
+
+        assert registered.status_code == 201
+        assert registered.json()["email"] == "open@example.com"
+
+
 def test_knowledge_status(authenticated_client) -> None:
     response = authenticated_client.get("/api/knowledge")
     assert response.status_code == 200
