@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 from app.config import Settings
 from app.services.attachments import AttachmentStore, build_user_content
@@ -24,6 +25,7 @@ class FakeRuntime:
     def __init__(self, modality: str = "image_xic") -> None:
         self.calls: list[dict] = []
         self.modality = modality
+        self.deployment = SimpleNamespace(input_modality=modality)
 
     def analyze(self, **kwargs):
         self.calls.append(kwargs)
@@ -155,3 +157,32 @@ def test_tool_rejects_declared_dimension_drift(tmp_path: Path) -> None:
 
     assert "dimensions" in payload["error"]
     assert runtime.calls == []
+
+
+def test_xic_only_tool_ignores_text_attachment_id_and_preserves_signal(tmp_path: Path) -> None:
+    settings = _settings(tmp_path, enabled=True)
+    store = AttachmentStore(settings)
+    descriptor = store.save("chromatogram.json", b'{"xic_signal": [0.5]}')
+    runtime = FakeRuntime(modality="xic_only")
+    candidate = build_chromatogram_tool(settings, runtime=runtime, attachment_store=store)
+    assert candidate is not None
+    signal = [index / 159 for index in range(160)]
+
+    with authorized_chromatogram_attachments([descriptor.id]):
+        payload = json.loads(
+            candidate.invoke(
+                {
+                    "task": "peak_grounding",
+                    "language": "zh-CN",
+                    "xic_signal": signal,
+                    "image_attachment_id": descriptor.id,
+                    "image_width": 400,
+                    "image_height": 300,
+                }
+            )
+        )
+
+    assert payload["result"] == {"peak_present": True}
+    assert len(runtime.calls) == 1
+    assert runtime.calls[0]["xic_signal"] == signal
+    assert runtime.calls[0]["image_path"] is None

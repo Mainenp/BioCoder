@@ -5,9 +5,10 @@ from __future__ import annotations
 import json
 import struct
 import tempfile
-from collections.abc import Iterator
+from collections.abc import Collection, Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
+from functools import lru_cache
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
@@ -77,6 +78,21 @@ class ChromatogramAnalysisInput(BaseModel):
     )
 
 
+@lru_cache(maxsize=4)
+def get_chromatogram_runtime(manifest_path: Path) -> ChromatogramDeploymentRuntime:
+    """Return one lazy runtime per immutable deployment manifest.
+
+    The HTTP endpoint and LangChain tool share this cache so enabling both
+    surfaces cannot load two copies of the frozen model onto the GPU.
+    """
+
+    from multimodal_science.qwen3vl.deployment_runtime import (
+        ChromatogramDeploymentRuntime,
+    )
+
+    return ChromatogramDeploymentRuntime(manifest_path.expanduser().resolve())
+
+
 def _image_dimensions(data: bytes) -> tuple[int, int]:
     if data.startswith(b"\x89PNG\r\n\x1a\n") and len(data) >= 24:
         return struct.unpack(">II", data[16:24])
@@ -121,6 +137,56 @@ def _image_dimensions(data: bytes) -> tuple[int, int]:
     raise ValueError("The image dimensions could not be verified")
 
 
+def execute_chromatogram_analysis(
+    payload: ChromatogramAnalysisInput,
+    *,
+    runtime: ChromatogramDeploymentRuntime,
+    attachment_store: AttachmentStore,
+    authorized_attachment_ids: Collection[str] = (),
+) -> dict[str, Any]:
+    """Execute an already-validated request without an LLM serialization hop."""
+
+    temporary_path: Path | None = None
+    try:
+        image_path: Path | None = None
+        image_attachment_id = payload.image_attachment_id
+        if runtime.deployment.input_modality == "xic_only":
+            # Text/JSON attachments are data sources, never image pixels. Some
+            # tool-calling models eagerly copy the current attachment ID into
+            # every optional attachment field; ignoring it is safe because no
+            # attachment bytes are read on the XIC-only path.
+            image_attachment_id = None
+        if image_attachment_id is not None:
+            if image_attachment_id not in authorized_attachment_ids:
+                raise ValueError("Image attachment is not authorized for this chat turn")
+            descriptor, image_bytes, _ = attachment_store.load(image_attachment_id)
+            if descriptor.kind != "image":
+                raise ValueError("Chromatography image attachment must be an image")
+            actual_width, actual_height = _image_dimensions(image_bytes)
+            if (actual_width, actual_height) != (payload.image_width, payload.image_height):
+                raise ValueError("Declared image dimensions do not match the attachment")
+            suffix = str(descriptor.metadata.get("suffix", ".png"))
+            with tempfile.NamedTemporaryFile(
+                prefix="biocoder-chromatogram-", suffix=suffix, delete=False
+            ) as stream:
+                stream.write(image_bytes)
+                temporary_path = Path(stream.name)
+            image_path = temporary_path
+        return runtime.analyze(
+            task=payload.task,
+            language=payload.language,
+            xic_signal=payload.xic_signal,
+            xic_available=payload.xic_available,
+            image_path=image_path,
+            image_width=payload.image_width,
+            image_height=payload.image_height,
+            metadata=payload.metadata,
+        )
+    finally:
+        if temporary_path is not None:
+            temporary_path.unlink(missing_ok=True)
+
+
 def build_chromatogram_tool(
     settings: Settings,
     *,
@@ -134,14 +200,7 @@ def build_chromatogram_tool(
     manifest_path = settings.chromatogram_deployment_manifest_path
     if manifest_path is None:
         raise ValueError("Chromatogram tool is enabled without a deployment manifest")
-    if runtime is None:
-        from multimodal_science.qwen3vl.deployment_runtime import (
-            ChromatogramDeploymentRuntime,
-        )
-
-        resolved_runtime = ChromatogramDeploymentRuntime(manifest_path)
-    else:
-        resolved_runtime = runtime
+    resolved_runtime = runtime or get_chromatogram_runtime(manifest_path)
     store = attachment_store or AttachmentStore(settings)
 
     @tool(args_schema=ChromatogramAnalysisInput)
@@ -157,45 +216,29 @@ def build_chromatogram_tool(
     ) -> str:
         """Analyze a chromatographic ROI with the frozen Qwen/XIC model. Use only when the user supplied normalized XIC values and, for image+XIC deployments, a current-message image attachment ID."""
 
-        temporary_path: Path | None = None
         try:
-            image_path: Path | None = None
-            if image_attachment_id is not None:
-                if image_attachment_id not in _AUTHORIZED_ATTACHMENTS.get():
-                    raise ValueError("Image attachment is not authorized for this chat turn")
-                descriptor, payload, _ = store.load(image_attachment_id)
-                if descriptor.kind != "image":
-                    raise ValueError("Chromatography image attachment must be an image")
-                actual_width, actual_height = _image_dimensions(payload)
-                if (actual_width, actual_height) != (image_width, image_height):
-                    raise ValueError("Declared image dimensions do not match the attachment")
-                suffix = str(descriptor.metadata.get("suffix", ".png"))
-                with tempfile.NamedTemporaryFile(
-                    prefix="biocoder-chromatogram-", suffix=suffix, delete=False
-                ) as stream:
-                    stream.write(payload)
-                    temporary_path = Path(stream.name)
-                image_path = temporary_path
-            payload = resolved_runtime.analyze(
-                task=task,
-                language=language,
-                xic_signal=xic_signal,
-                xic_available=xic_available,
-                image_path=image_path,
-                image_width=image_width,
-                image_height=image_height,
-                metadata=metadata,
+            result = execute_chromatogram_analysis(
+                ChromatogramAnalysisInput(
+                    task=task,
+                    language=language,
+                    xic_signal=xic_signal,
+                    xic_available=xic_available,
+                    image_attachment_id=image_attachment_id,
+                    image_width=image_width,
+                    image_height=image_height,
+                    metadata=metadata,
+                ),
+                runtime=resolved_runtime,
+                attachment_store=store,
+                authorized_attachment_ids=_AUTHORIZED_ATTACHMENTS.get(),
             )
-            return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+            return json.dumps(result, ensure_ascii=False, separators=(",", ":"))
         except Exception as exc:
             return json.dumps(
                 {"error": f"Chromatogram analysis failed: {exc}"},
                 ensure_ascii=False,
                 separators=(",", ":"),
             )
-        finally:
-            if temporary_path is not None:
-                temporary_path.unlink(missing_ok=True)
 
     return analyze_chromatogram
 
@@ -236,5 +279,7 @@ __all__ = [
     "ChromatogramAnalysisInput",
     "authorized_chromatogram_attachments",
     "build_chromatogram_tool",
+    "execute_chromatogram_analysis",
+    "get_chromatogram_runtime",
     "register_chromatogram_tool",
 ]

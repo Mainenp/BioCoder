@@ -60,6 +60,28 @@ GPU 环境需要安装 `backend` 的 `training` optional dependencies（Transfor
 
 Agent 会自动调用 `analyze_chromatogram`，返回结构化 JSON、deployment ID 与 deployment manifest SHA-256。峰定位输出为原图像素坐标 `[x1,y1,x2,y2]`，不是临床诊断结果。
 
+### 结构化 XIC JSON（推荐）
+
+长数值数组不应由聊天模型重新序列化。网页检测到单个符合下列契约的 JSON
+附件时，会直接调用已鉴权的 `POST /api/chromatogram/analyze`，绕过 LLM 的
+function-call 参数转录，同时继续使用相同的冻结运行时、manifest 校验与 GPU 推理锁：
+
+```json
+{
+  "task": "peak_grounding",
+  "language": "zh-CN",
+  "xic_available": true,
+  "image_width": 400,
+  "image_height": 300,
+  "xic_signal": [0.0, 0.1, 1.0, 0.1]
+}
+```
+
+上例仅展示字段，正式部署的 `xic_signal` 必须与 projector 固定长度一致（当前为
+160 点）。接口要求登录；数值必须有限且位于 `[0,1]`。`xic_only` 部署不会读取
+任何附件作为图像，即使工具调用模型误填了文本附件 ID，也会在读取附件字节前将其
+忽略。普通 JSON 文件仍按常规聊天附件处理。
+
 ## 不包含的内容
 
 GitHub 仓库包含推理代码、校验器、Agent 工具、测试与文档；不包含模型权重、私有色谱数据、validation/internal-test 资产或答案。因此新机器克隆仓库后不会“自动拥有”模型；必须显式挂载已冻结的外部部署物。

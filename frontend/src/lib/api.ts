@@ -3,6 +3,8 @@ import type {
   AuthConfig,
   AuthUser,
   ChatResponse,
+  ChromatogramAnalysisRequest,
+  ChromatogramAnalysisResponse,
   ConversationDetail,
   ConversationSummary,
   FeedbackRecord,
@@ -73,6 +75,12 @@ export const api = {
         attachment_ids: attachmentIds,
       }),
     }, 95_000).then(parse<ChatResponse>),
+  analyzeChromatogram: (payload: ChromatogramAnalysisRequest) =>
+    request(`${API_URL}/chromatogram/analyze`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    }, 300_000).then(parse<ChromatogramAnalysisResponse>),
   uploadAttachment: (file: File) => {
     const body = new FormData()
     body.append('file', file)

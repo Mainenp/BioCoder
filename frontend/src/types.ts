@@ -57,6 +57,34 @@ export type Health = {
   attachment_formats: string[]
   attachment_max_files: number
   attachment_max_file_bytes: number
+  chromatogram_tool_enabled: boolean
+}
+
+export type ChromatogramTask =
+  | 'peak_presence'
+  | 'peak_presence_metadata'
+  | 'peak_grounding'
+  | 'scientific_qc'
+
+export type ChromatogramAnalysisRequest = {
+  task: ChromatogramTask
+  language: 'en' | 'zh-CN'
+  xic_signal: number[]
+  xic_available?: boolean
+  image_width: number
+  image_height: number
+  metadata?: Record<string, unknown> | null
+}
+
+export type ChromatogramAnalysisResponse = {
+  deployment_id: string
+  deployment_manifest_sha256: string
+  input_modality: 'xic_only' | 'image_xic'
+  task: ChromatogramTask
+  language: 'en' | 'zh-CN'
+  result: Record<string, unknown>
+  raw_response: string
+  runtime: Record<string, unknown>
 }
 
 export type Message = {
