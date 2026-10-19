@@ -144,7 +144,11 @@ def test_chromatogram_api_preserves_structured_xic_without_llm(
         "chromatogram_deployment_manifest_path",
         main_module.settings.data_dir / "deployment.json",
     )
-    monkeypatch.setattr(main_module, "get_chromatogram_runtime", lambda _: runtime)
+    monkeypatch.setattr(
+        main_module,
+        "build_chromatogram_router",
+        lambda _: SimpleNamespace(run=lambda payload, operation: operation(runtime)),
+    )
 
     response = authenticated_client.post(
         "/api/chromatogram/analyze",
@@ -182,7 +186,12 @@ def test_chromatogram_api_reports_exact_deployment_length_error(
         "chromatogram_deployment_manifest_path",
         main_module.settings.data_dir / "deployment.json",
     )
-    monkeypatch.setattr(main_module, "get_chromatogram_runtime", lambda _: StrictRuntime())
+    runtime = StrictRuntime()
+    monkeypatch.setattr(
+        main_module,
+        "build_chromatogram_router",
+        lambda _: SimpleNamespace(run=lambda payload, operation: operation(runtime)),
+    )
 
     response = authenticated_client.post(
         "/api/chromatogram/analyze",

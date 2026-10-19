@@ -34,10 +34,12 @@ def parser() -> argparse.ArgumentParser:
     command.add_argument("--model-root", type=Path, required=True)
     command.add_argument("--model-revision", required=True)
     command.add_argument("--adapter-dir", type=Path, required=True)
-    command.add_argument("--projector-path", type=Path, required=True)
+    command.add_argument("--projector-path", type=Path)
     command.add_argument("--processor-dir", type=Path, required=True)
     command.add_argument("--training-report-path", type=Path, required=True)
-    command.add_argument("--input-modality", choices=("image_xic", "xic_only"), required=True)
+    command.add_argument(
+        "--input-modality", choices=("image_only", "image_xic", "xic_only"), required=True
+    )
     command.add_argument("--attention-implementation", choices=("sdpa", "eager"), default="sdpa")
     command.add_argument("--input-points", type=int, default=160)
     command.add_argument("--hidden-size", type=int, default=2560)
@@ -58,18 +60,23 @@ def main() -> None:
     output.mkdir(parents=True)
     model_root = args.model_root.expanduser().resolve()
     adapter_dir = args.adapter_dir.expanduser().resolve()
-    projector = args.projector_path.expanduser().resolve()
+    projector = args.projector_path.expanduser().resolve() if args.projector_path else None
+    if args.input_modality == "image_only" and projector is not None:
+        raise ValueError("Image-only deployment must not bind a sensor projector")
+    if args.input_modality != "image_only" and projector is None:
+        raise ValueError("Sensor deployment requires --projector-path")
     processor_dir = args.processor_dir.expanduser().resolve()
     report = args.training_report_path.expanduser().resolve()
     for path, label, directory in (
         (model_root, "model root", True),
         (adapter_dir, "adapter directory", True),
-        (projector, "projector", False),
         (processor_dir, "processor directory", True),
         (report, "training report", False),
     ):
         if not (path.is_dir() if directory else path.is_file()):
             raise ValueError(f"Missing {label}: {path}")
+    if projector is not None and not projector.is_file():
+        raise ValueError(f"Missing projector: {projector}")
 
     model_manifest = output / "model.files.sha256"
     processor_manifest = output / "processor.files.sha256"
@@ -90,8 +97,8 @@ def main() -> None:
             "adapter_dir": str(adapter_dir),
             "adapter_config_sha256": sha256_file(adapter_config),
             "adapter_weights_sha256": sha256_file(adapter_weights),
-            "projector_path": str(projector),
-            "projector_sha256": sha256_file(projector),
+            "projector_path": str(projector) if projector is not None else None,
+            "projector_sha256": sha256_file(projector) if projector is not None else None,
             "processor_dir": str(processor_dir),
             "processor_manifest_path": str(processor_manifest),
             "processor_manifest_sha256": processor_manifest_sha,
@@ -99,7 +106,7 @@ def main() -> None:
         "runtime": {
             "input_modality": args.input_modality,
             "attention_implementation": args.attention_implementation,
-            "sensor_projector": {
+            "sensor_projector": None if projector is None else {
                 "input_points": args.input_points,
                 "hidden_size": args.hidden_size,
                 "sensor_tokens": args.sensor_tokens,

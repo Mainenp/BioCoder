@@ -44,7 +44,8 @@ def _deployment(tmp_path: Path, *, modality: str = "xic_only") -> Path:
     _write(adapter / "adapter_config.json", "{}\n")
     _write(adapter / "adapter_model.safetensors", "adapter")
     projector = tmp_path / "candidate" / "sensor_projector.safetensors"
-    _write(projector, "projector")
+    if modality != "image_only":
+        _write(projector, "projector")
     processor = tmp_path / "candidate" / "processor"
     _write(processor / "tokenizer_config.json", "{}\n")
     processor_manifest = tmp_path / "processor.files.sha256"
@@ -77,8 +78,8 @@ def _deployment(tmp_path: Path, *, modality: str = "xic_only") -> Path:
             "adapter_dir": str(adapter),
             "adapter_config_sha256": _digest(adapter / "adapter_config.json"),
             "adapter_weights_sha256": _digest(adapter / "adapter_model.safetensors"),
-            "projector_path": str(projector),
-            "projector_sha256": _digest(projector),
+            "projector_path": str(projector) if modality != "image_only" else None,
+            "projector_sha256": _digest(projector) if modality != "image_only" else None,
             "processor_dir": str(processor),
             "processor_manifest_path": str(processor_manifest),
             "processor_manifest_sha256": processor_manifest_sha,
@@ -86,7 +87,7 @@ def _deployment(tmp_path: Path, *, modality: str = "xic_only") -> Path:
         "runtime": {
             "input_modality": modality,
             "attention_implementation": "sdpa",
-            "sensor_projector": {
+            "sensor_projector": None if modality == "image_only" else {
                 "input_points": 160,
                 "hidden_size": 2560,
                 "sensor_tokens": 4,
@@ -124,6 +125,52 @@ def test_deployment_verifies_every_bound_artifact(tmp_path: Path) -> None:
     assert verified.deployment_id == "test-candidate"
     assert verified.input_modality == "xic_only"
     assert verified.projector_spec.input_points == 160
+
+
+def test_image_only_deployment_has_no_sensor_projector(tmp_path: Path) -> None:
+    verified = verify_deployment_manifest(_deployment(tmp_path, modality="image_only"))
+
+    assert verified.input_modality == "image_only"
+    assert verified.projector_path is None
+    assert verified.projector_spec is None
+
+
+def test_image_only_runtime_requires_pixels_and_rejects_xic(tmp_path: Path) -> None:
+    image = tmp_path / "roi.png"
+    image.write_bytes(b"image")
+
+    class Backend:
+        metadata = {"backend": "image-only"}
+
+        def generate(self, prompt, signal, available, image_path) -> str:
+            assert signal == ()
+            assert image_path == image
+            return '{"bbox_2d":[10,0,40,80]}'
+
+    runtime = ChromatogramDeploymentRuntime(
+        _deployment(tmp_path, modality="image_only"), lambda _: Backend()
+    )
+    result = runtime.analyze(
+        task="peak_grounding",
+        language="en",
+        xic_signal=None,
+        xic_available=False,
+        image_path=image,
+        image_width=100,
+        image_height=80,
+    )
+    assert result["input_modality"] == "image_only"
+
+    with pytest.raises(ValueError, match="must not receive XIC"):
+        runtime.analyze(
+            task="peak_grounding",
+            language="en",
+            xic_signal=[0.5] * 160,
+            xic_available=True,
+            image_path=image,
+            image_width=100,
+            image_height=80,
+        )
 
 
 def test_deployment_rejects_tampered_weights(tmp_path: Path) -> None:

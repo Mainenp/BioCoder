@@ -48,8 +48,10 @@ from app.services.llm import is_loopback_base_url
 from app.services.training import LocalSFTCoordinator, TrainingJobBusyError, TrainingJobState
 from app.tools.chromatogram import (
     ChromatogramAnalysisInput,
+    build_chromatogram_router,
+    configured_chromatogram_manifests,
     execute_chromatogram_analysis,
-    get_chromatogram_runtime,
+    normalize_chromatogram_attachment,
 )
 from biocoder.bad_cases.schema import BadCase
 from biocoder.bad_cases.store import BadCaseStore, should_create_bad_case
@@ -118,16 +120,19 @@ async def lifespan(_: FastAPI):
     auth_store.initialize()
     conversation_store.initialize()
     if settings.chromatogram_tool_enabled:
-        if settings.chromatogram_deployment_manifest_path is None:
-            raise RuntimeError("Chromatogram tool is enabled without a deployment manifest")
+        manifests = configured_chromatogram_manifests(settings)
+        if not manifests:
+            raise RuntimeError("Chromatogram tool is enabled without deployment manifests")
         from multimodal_science.qwen3vl.deployment_runtime import (
             verify_deployment_manifest,
         )
 
-        await asyncio.to_thread(
-            verify_deployment_manifest,
-            settings.chromatogram_deployment_manifest_path,
-        )
+        for modality, manifest_path in manifests.items():
+            verified = await asyncio.to_thread(verify_deployment_manifest, manifest_path)
+            if verified.input_modality != modality:
+                raise RuntimeError(
+                    f"Configured {modality} manifest declares {verified.input_modality}"
+                )
     yield
 
 
@@ -223,6 +228,7 @@ def health() -> HealthResponse:
         attachment_max_files=settings.attachment_max_files,
         attachment_max_file_bytes=settings.attachment_max_file_bytes,
         chromatogram_tool_enabled=settings.chromatogram_tool_enabled,
+        chromatogram_modalities=sorted(configured_chromatogram_manifests(settings)),
     )
 
 
@@ -235,21 +241,28 @@ async def analyze_chromatogram(
 
     if not settings.chromatogram_tool_enabled:
         raise HTTPException(status_code=503, detail="Chromatogram analysis is disabled")
-    manifest_path = settings.chromatogram_deployment_manifest_path
-    if manifest_path is None:
-        raise HTTPException(status_code=503, detail="Chromatogram deployment is not configured")
+    if not configured_chromatogram_manifests(settings):
+        raise HTTPException(status_code=503, detail="Chromatogram deployments are not configured")
     attachment_id = payload.image_attachment_id
     if attachment_id and not auth_store.owns_resource("attachment", attachment_id, user.id):
         raise HTTPException(status_code=404, detail="附件不存在或无权访问。")
     try:
-        runtime = get_chromatogram_runtime(manifest_path)
         authorized_ids = (attachment_id,) if attachment_id else ()
-        return await asyncio.to_thread(
-            execute_chromatogram_analysis,
+        payload = normalize_chromatogram_attachment(
             payload,
-            runtime=runtime,
             attachment_store=attachment_store,
             authorized_attachment_ids=authorized_ids,
+        )
+        router = build_chromatogram_router(settings)
+        return await asyncio.to_thread(
+            router.run,
+            payload,
+            lambda runtime: execute_chromatogram_analysis(
+                payload,
+                runtime=runtime,
+                attachment_store=attachment_store,
+                authorized_attachment_ids=authorized_ids,
+            ),
         )
     except AttachmentNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc

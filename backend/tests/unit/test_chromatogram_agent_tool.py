@@ -4,9 +4,13 @@ import json
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 from app.config import Settings
 from app.services.attachments import AttachmentStore, build_user_content
 from app.tools.chromatogram import (
+    ChromatogramAnalysisInput,
+    ChromatogramRuntimeRouter,
     authorized_chromatogram_attachments,
     build_chromatogram_tool,
     register_chromatogram_tool,
@@ -26,6 +30,7 @@ class FakeRuntime:
         self.calls: list[dict] = []
         self.modality = modality
         self.deployment = SimpleNamespace(input_modality=modality)
+        self.unloaded = 0
 
     def analyze(self, **kwargs):
         self.calls.append(kwargs)
@@ -34,6 +39,9 @@ class FakeRuntime:
             "deployment_manifest_sha256": "a" * 64,
             "result": {"peak_present": True},
         }
+
+    def unload(self) -> None:
+        self.unloaded += 1
 
 
 def _settings(tmp_path: Path, *, enabled: bool) -> Settings:
@@ -133,6 +141,32 @@ def test_tool_reads_only_authorized_image_and_cleans_temporary_file(tmp_path: Pa
     assert not temporary.exists()
 
 
+def test_image_only_tool_accepts_authorized_pixels_without_xic(tmp_path: Path) -> None:
+    settings = _settings(tmp_path, enabled=True)
+    store = AttachmentStore(settings)
+    descriptor = store.save("roi.png", PNG_1X1)
+    runtime = FakeRuntime(modality="image_only")
+    candidate = build_chromatogram_tool(settings, runtime=runtime, attachment_store=store)
+    assert candidate is not None
+
+    with authorized_chromatogram_attachments([descriptor.id]):
+        payload = json.loads(
+            candidate.invoke(
+                {
+                    "task": "peak_grounding",
+                    "language": "zh-CN",
+                    "image_attachment_id": descriptor.id,
+                    "image_width": 1,
+                    "image_height": 1,
+                }
+            )
+        )
+
+    assert payload["result"] == {"peak_present": True}
+    assert runtime.calls[0]["xic_signal"] is None
+    assert runtime.calls[0]["image_path"] is not None
+
+
 def test_tool_rejects_declared_dimension_drift(tmp_path: Path) -> None:
     settings = _settings(tmp_path, enabled=True)
     store = AttachmentStore(settings)
@@ -186,3 +220,47 @@ def test_xic_only_tool_ignores_text_attachment_id_and_preserves_signal(tmp_path:
     assert len(runtime.calls) == 1
     assert runtime.calls[0]["xic_signal"] == signal
     assert runtime.calls[0]["image_path"] is None
+
+
+def test_router_selects_three_modalities_and_unloads_previous_backend(tmp_path: Path) -> None:
+    runtimes = {
+        modality: FakeRuntime(modality)
+        for modality in ("xic_only", "image_xic", "image_only")
+    }
+    paths = {modality: tmp_path / f"{modality}.json" for modality in runtimes}
+    by_path = {path.resolve(): runtimes[modality] for modality, path in paths.items()}
+    router = ChromatogramRuntimeRouter(
+        paths,
+        runtime_factory=lambda path: by_path[path.resolve()],
+    )
+
+    xic = ChromatogramAnalysisInput(
+        task="peak_grounding",
+        xic_signal=[0.5] * 160,
+        image_width=400,
+        image_height=300,
+    )
+    image_xic = xic.model_copy(update={"image_attachment_id": "a" * 32})
+    image = xic.model_copy(update={"xic_signal": None, "image_attachment_id": "b" * 32})
+
+    assert router.run(xic, lambda runtime: runtime.modality) == "xic_only"
+    assert router.run(image_xic, lambda runtime: runtime.modality) == "image_xic"
+    assert runtimes["xic_only"].unloaded == 1
+    assert router.run(image, lambda runtime: runtime.modality) == "image_only"
+    assert runtimes["image_xic"].unloaded == 1
+
+
+def test_router_rejects_missing_input_and_undeployed_modality(tmp_path: Path) -> None:
+    runtime = FakeRuntime("xic_only")
+    router = ChromatogramRuntimeRouter(
+        {"xic_only": tmp_path / "xic.json"}, runtime_factory=lambda _: runtime
+    )
+    missing = ChromatogramAnalysisInput(
+        task="peak_presence", xic_signal=None, image_width=400, image_height=300
+    )
+    image = missing.model_copy(update={"image_attachment_id": "a" * 32})
+
+    with pytest.raises(ValueError, match="requires XIC values"):
+        router.run(missing, lambda selected: selected)
+    with pytest.raises(ValueError, match="not deployed: image_only"):
+        router.run(image, lambda selected: selected)
