@@ -1,5 +1,7 @@
 # BioCoder
 
+> 色谱多模态模型的 Agent 部署、哈希绑定与数据隔离说明见 [MULTIMODAL_AGENT_DEPLOYMENT.md](MULTIMODAL_AGENT_DEPLOYMENT.md)。
+
 ### Evidence-grounded biomedical research agent
 
 BioCoder is an AI research workspace for biomedical questions, drug research, and evidence synthesis. It turns a natural-language question into a structured research plan, searches relevant scientific and regulatory sources, and produces a concise answer with traceable citations and explicit uncertainty.

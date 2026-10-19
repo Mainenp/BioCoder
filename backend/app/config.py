@@ -71,6 +71,9 @@ class Settings(BaseSettings):
     attachment_max_vision_images: int = 6
     attachment_max_visual_bytes: int = 20 * 1024 * 1024
     attachment_pdf_vision_pages: int = 4
+    chromatogram_tool_enabled: bool = False
+    chromatogram_deployment_manifest_path: Path | None = None
+    chromatogram_tool_timeout_seconds: float = 300.0
     knowledge_exclude_files: str = "demo_knowledge.md"
     history_db_path: Path = BACKEND_ROOT / "data" / "bioagent.db"
     trajectory_dir: Path = BACKEND_ROOT / "data" / "trajectories"

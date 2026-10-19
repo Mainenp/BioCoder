@@ -102,6 +102,7 @@ class HealthResponse(BaseModel):
     attachment_formats: list[str] = Field(default_factory=list)
     attachment_max_files: int = 0
     attachment_max_file_bytes: int = 0
+    chromatogram_tool_enabled: bool = False
     version: str = "2.0.0"
 
 

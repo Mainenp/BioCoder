@@ -180,7 +180,8 @@ def build_user_content(message: str, attachments: list[PreparedAttachment], max_
     for item in attachments:
         descriptor = item.descriptor
         header = (
-            f"--- 附件开始：{descriptor.name}；类型={descriptor.kind}；"
+            f"--- 附件开始：{descriptor.name}；attachment_id={descriptor.id}；"
+            f"类型={descriptor.kind}；"
             f"大小={descriptor.size_bytes} bytes ---"
         )
         available = max(0, remaining)
