@@ -5,12 +5,12 @@ from __future__ import annotations
 import json
 import struct
 import tempfile
-from collections.abc import Collection, Iterator
+from collections.abc import Callable, Collection, Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
 from functools import lru_cache
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any, Literal, TypeVar
 
 from langchain_core.tools import BaseTool, tool
 from pydantic import BaseModel, Field
@@ -48,7 +48,8 @@ class ChromatogramAnalysisInput(BaseModel):
         "scientific_qc",
     ]
     language: Literal["en", "zh-CN"] = "zh-CN"
-    xic_signal: list[float] = Field(
+    xic_signal: list[float] | None = Field(
+        default=None,
         min_length=32,
         max_length=4096,
         description="Normalized [0,1] XIC values; length must match the frozen deployment.",
@@ -78,7 +79,7 @@ class ChromatogramAnalysisInput(BaseModel):
     )
 
 
-@lru_cache(maxsize=4)
+@lru_cache(maxsize=3)
 def get_chromatogram_runtime(manifest_path: Path) -> ChromatogramDeploymentRuntime:
     """Return one lazy runtime per immutable deployment manifest.
 
@@ -91,6 +92,105 @@ def get_chromatogram_runtime(manifest_path: Path) -> ChromatogramDeploymentRunti
     )
 
     return ChromatogramDeploymentRuntime(manifest_path.expanduser().resolve())
+
+
+def configured_chromatogram_manifests(settings: Settings) -> dict[str, Path]:
+    """Resolve explicit modality manifests with the v2 XIC-only setting as fallback."""
+
+    manifests = {
+        modality: path
+        for modality, path in {
+            "xic_only": settings.chromatogram_xic_only_manifest_path,
+            "image_xic": settings.chromatogram_image_xic_manifest_path,
+            "image_only": settings.chromatogram_image_only_manifest_path,
+        }.items()
+        if path is not None
+    }
+    if "xic_only" not in manifests and settings.chromatogram_deployment_manifest_path is not None:
+        manifests["xic_only"] = settings.chromatogram_deployment_manifest_path
+    return manifests
+
+
+T = TypeVar("T")
+
+
+class ChromatogramRuntimeRouter:
+    """Select one immutable modality and keep at most one CUDA backend resident."""
+
+    def __init__(
+        self,
+        manifests: dict[str, Path],
+        *,
+        runtime_factory: Callable[[Path], ChromatogramDeploymentRuntime] = get_chromatogram_runtime,
+    ) -> None:
+        if not manifests:
+            raise ValueError("No chromatography deployments are configured")
+        self._manifests = {
+            modality: path.expanduser().resolve() for modality, path in manifests.items()
+        }
+        self._runtime_factory = runtime_factory
+        self._runtimes: dict[str, ChromatogramDeploymentRuntime] = {}
+        self._active_modality: str | None = None
+        import threading
+
+        self._lock = threading.RLock()
+
+    @property
+    def modalities(self) -> tuple[str, ...]:
+        return tuple(sorted(self._manifests))
+
+    @staticmethod
+    def modality_for(payload: ChromatogramAnalysisInput) -> str:
+        has_xic = payload.xic_signal is not None
+        has_image = payload.image_attachment_id is not None
+        if has_xic and has_image:
+            return "image_xic"
+        if has_xic:
+            return "xic_only"
+        if has_image:
+            return "image_only"
+        raise ValueError("Chromatography analysis requires XIC values, an image, or both")
+
+    def run(self, payload: ChromatogramAnalysisInput, operation: Callable[[Any], T]) -> T:
+        modality = self.modality_for(payload)
+        if modality not in self._manifests:
+            raise ValueError(f"Chromatography modality is not deployed: {modality}")
+        with self._lock:
+            if self._active_modality is not None and self._active_modality != modality:
+                active = self._runtimes.get(self._active_modality)
+                if active is not None:
+                    active.unload()
+            runtime = self._runtimes.get(modality)
+            if runtime is None:
+                runtime = self._runtime_factory(self._manifests[modality])
+                if runtime.deployment.input_modality != modality:
+                    raise ValueError(
+                        f"Configured {modality} manifest declares "
+                        f"{runtime.deployment.input_modality}"
+                    )
+                self._runtimes[modality] = runtime
+            self._active_modality = modality
+            return operation(runtime)
+
+
+@lru_cache(maxsize=4)
+def get_chromatogram_router(
+    configured: tuple[tuple[str, str], ...],
+) -> ChromatogramRuntimeRouter:
+    return ChromatogramRuntimeRouter(
+        {modality: Path(path) for modality, path in configured}
+    )
+
+
+def build_chromatogram_router(settings: Settings) -> ChromatogramRuntimeRouter:
+    manifests = configured_chromatogram_manifests(settings)
+    configured = tuple(
+        sorted(
+            (modality, str(path.expanduser().resolve()))
+            for modality, path in manifests.items()
+        )
+    )
+    return get_chromatogram_router(configured)
 
 
 def _image_dimensions(data: bytes) -> tuple[int, int]:
@@ -135,6 +235,27 @@ def _image_dimensions(data: bytes) -> tuple[int, int]:
                 break
             offset += length
     raise ValueError("The image dimensions could not be verified")
+
+
+def normalize_chromatogram_attachment(
+    payload: ChromatogramAnalysisInput,
+    *,
+    attachment_store: AttachmentStore,
+    authorized_attachment_ids: Collection[str],
+) -> ChromatogramAnalysisInput:
+    """Drop non-image attachment IDs from XIC requests before modality routing."""
+
+    attachment_id = payload.image_attachment_id
+    if attachment_id is None:
+        return payload
+    if attachment_id not in authorized_attachment_ids:
+        raise ValueError("Image attachment is not authorized for this chat turn")
+    descriptor, _, _ = attachment_store.load(attachment_id)
+    if descriptor.kind == "image":
+        return payload
+    if payload.xic_signal is None:
+        raise ValueError("Chromatography image attachment must be an image")
+    return payload.model_copy(update={"image_attachment_id": None})
 
 
 def execute_chromatogram_analysis(
@@ -191,47 +312,60 @@ def build_chromatogram_tool(
     settings: Settings,
     *,
     runtime: ChromatogramDeploymentRuntime | None = None,
+    router: ChromatogramRuntimeRouter | None = None,
     attachment_store: AttachmentStore | None = None,
 ) -> BaseTool | None:
     """Return the optional tool, validating its deployment before registration."""
 
     if not settings.chromatogram_tool_enabled:
         return None
-    manifest_path = settings.chromatogram_deployment_manifest_path
-    if manifest_path is None:
-        raise ValueError("Chromatogram tool is enabled without a deployment manifest")
-    resolved_runtime = runtime or get_chromatogram_runtime(manifest_path)
+    if runtime is not None and router is not None:
+        raise ValueError("Provide either a chromatography runtime or router, not both")
+    resolved_router = (
+        None if runtime is not None else (router or build_chromatogram_router(settings))
+    )
     store = attachment_store or AttachmentStore(settings)
 
     @tool(args_schema=ChromatogramAnalysisInput)
     def analyze_chromatogram(
         task: str,
         language: str,
-        xic_signal: list[float],
         image_width: int,
         image_height: int,
+        xic_signal: list[float] | None = None,
         xic_available: bool = True,
         image_attachment_id: str | None = None,
         metadata: dict[str, Any] | None = None,
     ) -> str:
-        """Analyze a chromatographic ROI with the frozen Qwen/XIC model. Use only when the user supplied normalized XIC values and, for image+XIC deployments, a current-message image attachment ID."""
+        """Analyze chromatography with the frozen model selected by supplied XIC/image inputs."""
 
         try:
-            result = execute_chromatogram_analysis(
-                ChromatogramAnalysisInput(
-                    task=task,
-                    language=language,
-                    xic_signal=xic_signal,
-                    xic_available=xic_available,
-                    image_attachment_id=image_attachment_id,
-                    image_width=image_width,
-                    image_height=image_height,
-                    metadata=metadata,
-                ),
-                runtime=resolved_runtime,
+            payload = ChromatogramAnalysisInput(
+                task=task,
+                language=language,
+                xic_signal=xic_signal,
+                xic_available=xic_available,
+                image_attachment_id=image_attachment_id,
+                image_width=image_width,
+                image_height=image_height,
+                metadata=metadata,
+            )
+            payload = normalize_chromatogram_attachment(
+                payload,
                 attachment_store=store,
                 authorized_attachment_ids=_AUTHORIZED_ATTACHMENTS.get(),
             )
+            execute = lambda selected: execute_chromatogram_analysis(
+                payload,
+                runtime=selected,
+                attachment_store=store,
+                authorized_attachment_ids=_AUTHORIZED_ATTACHMENTS.get(),
+            )
+            if runtime is not None:
+                result = execute(runtime)
+            else:
+                assert resolved_router is not None
+                result = resolved_router.run(payload, execute)
             return json.dumps(result, ensure_ascii=False, separators=(",", ":"))
         except Exception as exc:
             return json.dumps(
@@ -248,11 +382,13 @@ def register_chromatogram_tool(
     settings: Settings,
     *,
     runtime: ChromatogramDeploymentRuntime | None = None,
+    router: ChromatogramRuntimeRouter | None = None,
     attachment_store: AttachmentStore | None = None,
 ) -> None:
     candidate = build_chromatogram_tool(
         settings,
         runtime=runtime,
+        router=router,
         attachment_store=attachment_store,
     )
     if candidate is None:
@@ -277,9 +413,14 @@ def register_chromatogram_tool(
 
 __all__ = [
     "ChromatogramAnalysisInput",
+    "ChromatogramRuntimeRouter",
     "authorized_chromatogram_attachments",
+    "build_chromatogram_router",
     "build_chromatogram_tool",
+    "configured_chromatogram_manifests",
     "execute_chromatogram_analysis",
+    "get_chromatogram_router",
     "get_chromatogram_runtime",
+    "normalize_chromatogram_attachment",
     "register_chromatogram_tool",
 ]

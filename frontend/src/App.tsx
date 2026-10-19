@@ -105,14 +105,54 @@ function asChromatogramRequest(value: unknown): ChromatogramAnalysisRequest | un
 }
 
 async function chromatogramRequestFromFiles(files: File[]) {
-  if (files.length !== 1 || !files[0].name.toLowerCase().endsWith('.json')) return undefined
-  let value: unknown
-  try {
-    value = JSON.parse(await files[0].text())
-  } catch {
-    return undefined
+  const jsonFiles = files.filter((file) => file.name.toLowerCase().endsWith('.json'))
+  const imageFiles = files.filter((file) => file.type.startsWith('image/'))
+  if (jsonFiles.length > 1 || imageFiles.length > 1) return undefined
+  if (files.length !== jsonFiles.length + imageFiles.length) return undefined
+
+  async function dimensions(file: File) {
+    const bitmap = await createImageBitmap(file)
+    try {
+      return { width: bitmap.width, height: bitmap.height }
+    } finally {
+      bitmap.close()
+    }
   }
-  return asChromatogramRequest(value)
+
+  if (jsonFiles.length === 1) {
+    let value: unknown
+    try {
+      value = JSON.parse(await jsonFiles[0].text())
+    } catch {
+      return undefined
+    }
+    const request = asChromatogramRequest(value)
+    if (!request) return undefined
+    if (imageFiles.length === 1) {
+      const actual = await dimensions(imageFiles[0])
+      if (actual.width !== request.image_width || actual.height !== request.image_height) {
+        throw new Error('色谱图片尺寸与 JSON 中声明的 image_width/image_height 不一致。')
+      }
+    }
+    return { request, imageFile: imageFiles[0] }
+  }
+
+  if (imageFiles.length === 1) {
+    const actual = await dimensions(imageFiles[0])
+    return {
+      request: {
+        task: 'peak_grounding' as const,
+        language: 'zh-CN' as const,
+        xic_signal: null,
+        xic_available: false,
+        image_width: actual.width,
+        image_height: actual.height,
+        metadata: null,
+      },
+      imageFile: imageFiles[0],
+    }
+  }
+  return undefined
 }
 
 export default function App() {
@@ -175,7 +215,7 @@ export default function App() {
     setBusyStage(files.length ? 'uploading' : 'thinking')
     setActiveView('chat')
     try {
-      const chromatogramRequest = await chromatogramRequestFromFiles(files)
+      const chromatogramInput = await chromatogramRequestFromFiles(files)
       const attachments: Attachment[] = []
       for (const file of files) attachments.push(await api.uploadAttachment(file))
       setInput('')
@@ -185,9 +225,26 @@ export default function App() {
         { id: crypto.randomUUID(), role: 'user', content: question, attachments },
       ])
       setBusyStage('thinking')
-      if (chromatogramRequest) {
+      if (chromatogramInput) {
         if (!health?.chromatogram_tool_enabled) {
           throw new Error('服务端尚未启用色谱分析工具。')
+        }
+        const imageIndex = chromatogramInput.imageFile
+          ? files.indexOf(chromatogramInput.imageFile)
+          : -1
+        const chromatogramRequest: ChromatogramAnalysisRequest = {
+          ...chromatogramInput.request,
+          image_attachment_id: imageIndex >= 0 ? attachments[imageIndex].id : null,
+        }
+        const hasXic = Array.isArray(chromatogramRequest.xic_signal)
+        const hasImage = Boolean(chromatogramRequest.image_attachment_id)
+        const modality = hasXic && hasImage
+          ? 'image_xic'
+          : hasXic
+            ? 'xic_only'
+            : 'image_only'
+        if (health.chromatogram_modalities?.length && !health.chromatogram_modalities.includes(modality)) {
+          throw new Error(`服务端尚未部署 ${modality} 色谱模型。`)
         }
         const result = await api.analyzeChromatogram(chromatogramRequest)
         setMessages((current) => [
@@ -196,7 +253,7 @@ export default function App() {
             id: crypto.randomUUID(),
             role: 'assistant',
             content: `冻结色谱模型返回：\n\n\`\`\`json\n${JSON.stringify(result, null, 2)}\n\`\`\``,
-            plan: ['验证结构化 XIC 输入', '调用冻结色谱模型', '返回原始结构化结果'],
+            plan: ['验证结构化色谱输入', `选择 ${modality} 冻结模型`, '返回原始结构化结果'],
             tools: ['analyze_chromatogram'],
           },
         ])
@@ -244,7 +301,12 @@ export default function App() {
         setError(`“${file.name}”超过单文件 ${formatBytes(maximumBytes)} 限制。`)
         continue
       }
-      if (health && !health.vision_input_enabled && file.type.startsWith('image/')) {
+      if (
+        health
+        && !health.vision_input_enabled
+        && !health.chromatogram_tool_enabled
+        && file.type.startsWith('image/')
+      ) {
         setError('当前模型未启用视觉输入，不能添加图片。')
         continue
       }

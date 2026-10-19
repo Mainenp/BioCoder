@@ -8,6 +8,7 @@ loading surface.
 
 from __future__ import annotations
 
+import gc
 import json
 import math
 import re
@@ -34,7 +35,7 @@ DEPLOYMENT_TASKS = {
     "peak_grounding",
     "scientific_qc",
 }
-DEPLOYMENT_MODALITIES = {"image_xic", "xic_only"}
+DEPLOYMENT_MODALITIES = {"image_only", "image_xic", "xic_only"}
 _HEX64 = re.compile(r"^[0-9a-f]{64}$")
 _PROTECTED_PATH_MARKERS = (
     "answer",
@@ -167,8 +168,8 @@ class VerifiedDeployment:
     model_revision: str
     adapter_dir: Path
     processor_dir: Path
-    projector_path: Path
-    projector_spec: SensorProjectorSpec
+    projector_path: Path | None
+    projector_spec: SensorProjectorSpec | None
     input_modality: str
     attention_implementation: str
     min_pixels: int
@@ -210,8 +211,6 @@ def verify_deployment_manifest(path: Path) -> VerifiedDeployment:
         artifacts.get("adapter_weights_sha256"),
         "adapter weights",
     )
-    projector_path = _deployment_path(artifacts.get("projector_path"), "sensor projector")
-    _verify_file(projector_path, artifacts.get("projector_sha256"), "sensor projector")
     processor_dir = _deployment_path(
         artifacts.get("processor_dir"), "processor directory", directory=True
     )
@@ -242,10 +241,24 @@ def verify_deployment_manifest(path: Path) -> VerifiedDeployment:
     runtime = _object(manifest.get("runtime"), "deployment runtime")
     modality = runtime.get("input_modality")
     _require(modality in DEPLOYMENT_MODALITIES, "Unsupported deployment modality")
+    projector_path: Path | None = None
+    spec: SensorProjectorSpec | None = None
+    if modality == "image_only":
+        _require(
+            artifacts.get("projector_path") is None
+            and artifacts.get("projector_sha256") is None
+            and runtime.get("sensor_projector") is None,
+            "Image-only deployment must not bind a sensor projector",
+        )
+    else:
+        projector_path = _deployment_path(artifacts.get("projector_path"), "sensor projector")
+        _verify_file(projector_path, artifacts.get("projector_sha256"), "sensor projector")
+        spec = SensorProjectorSpec(
+            **_object(runtime.get("sensor_projector"), "sensor projector spec")
+        )
+        spec.validate()
     attention = runtime.get("attention_implementation")
     _require(attention in {"sdpa", "eager"}, "Unsupported attention implementation")
-    spec = SensorProjectorSpec(**_object(runtime.get("sensor_projector"), "sensor projector spec"))
-    spec.validate()
     min_pixels = runtime.get("min_pixels")
     max_pixels = runtime.get("max_pixels")
     max_new_tokens = runtime.get("max_new_tokens")
@@ -416,8 +429,14 @@ class _TransformersDeploymentBackend:
         if hasattr(image_processor, "size") and isinstance(image_processor.size, dict):
             image_processor.size["shortest_edge"] = deployment.min_pixels
             image_processor.size["longest_edge"] = deployment.max_pixels
-        self.projector = build_sensor_projector(deployment.projector_spec).to(device).eval()
-        self.projector.load_state_dict(load_file(str(deployment.projector_path)))
+        self.projector = None
+        if deployment.input_modality != "image_only":
+            _require(
+                deployment.projector_spec is not None and deployment.projector_path is not None,
+                "Sensor deployment is missing its projector",
+            )
+            self.projector = build_sensor_projector(deployment.projector_spec).to(device).eval()
+            self.projector.load_state_dict(load_file(str(deployment.projector_path)))
         self.torch = torch
         self.np = np
         self.device = device
@@ -433,18 +452,19 @@ class _TransformersDeploymentBackend:
             "transformers_version": transformers_version,
             "torch_version": torch.__version__,
             "cuda_device": torch.cuda.get_device_name(0),
-            "sensor_gate_probability": float(
-                self.projector.gate_logit.detach().float().sigmoid().cpu()
-            ),
             "visual_tower_guard_installed": deployment.input_modality == "xic_only",
         }
+        if self.projector is not None:
+            self.metadata["sensor_gate_probability"] = float(
+                self.projector.gate_logit.detach().float().sigmoid().cpu()
+            )
 
     def generate(
         self, prompt: str, signal: Sequence[float], available: bool, image_path: Path | None
     ) -> str:
         torch = self.torch
         modality = self.deployment.input_modality
-        if modality == "image_xic":
+        if modality in {"image_only", "image_xic"}:
             _require(
                 image_path is not None and image_path.is_file(),
                 "Image/XIC deployment requires an image",
@@ -481,6 +501,30 @@ class _TransformersDeploymentBackend:
             return_tensors="pt",
         )
         input_ids = encoded["input_ids"].to(self.device)
+        if modality == "image_only":
+            model_inputs = {
+                key: value.to(self.device) if hasattr(value, "to") else value
+                for key, value in encoded.items()
+            }
+            with torch.inference_mode(), torch.autocast(
+                device_type="cuda", dtype=torch.bfloat16
+            ):
+                output_ids = self.model.generate(
+                    **model_inputs,
+                    max_new_tokens=self.deployment.max_new_tokens,
+                    do_sample=False,
+                    use_cache=True,
+                )
+            generated = output_ids[0, input_ids.shape[1] :].tolist()
+            return self.processor.decode(
+                generated,
+                skip_special_tokens=True,
+                clean_up_tokenization_spaces=False,
+            )
+        _require(
+            self.deployment.projector_spec is not None and self.projector is not None,
+            "Sensor deployment is missing its projector",
+        )
         array = self.np.asarray(signal, dtype=self.np.float32)
         _require(
             array.shape == (self.deployment.projector_spec.input_points,), "Bad XIC signal shape"
@@ -550,6 +594,16 @@ class _TransformersDeploymentBackend:
             generated, skip_special_tokens=True, clean_up_tokenization_spaces=False
         )
 
+    def close(self) -> None:
+        """Release hooks and CUDA-owned model objects before a modality switch."""
+
+        if self.visual_guard is not None:
+            self.visual_guard.remove()
+            self.visual_guard = None
+        self.projector = None
+        self.generation_model = None
+        self.model = None
+
 
 BackendFactory = Callable[[VerifiedDeployment], Any]
 
@@ -574,45 +628,72 @@ class ChromatogramDeploymentRuntime:
             self._backend = self._backend_factory(verified)
         return self._backend
 
+    def unload(self) -> None:
+        """Unload the lazy backend so another deployment can use the same GPU."""
+
+        with self._lock:
+            backend = self._backend
+            self._backend = None
+            if backend is not None and callable(getattr(backend, "close", None)):
+                backend.close()
+            del backend
+            gc.collect()
+            try:
+                import torch
+
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+            except ImportError:
+                pass
+
     def analyze(
         self,
         *,
         task: str,
         language: str,
-        xic_signal: Sequence[float],
+        xic_signal: Sequence[float] | None,
         xic_available: bool,
         image_path: Path | None,
         image_width: int,
         image_height: int,
         metadata: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        _require(
-            len(xic_signal) == self.deployment.projector_spec.input_points,
-            "XIC signal length does not match deployment",
-        )
-        _require(
-            all(
-                isinstance(value, (int, float))
-                and not isinstance(value, bool)
-                and math.isfinite(float(value))
-                for value in xic_signal
-            ),
-            "XIC signal must contain finite numbers",
-        )
-        _require(
-            all(0.0 <= float(value) <= 1.0 for value in xic_signal),
-            "XIC signal must be normalized to [0, 1]",
-        )
-        if self.deployment.input_modality == "image_xic":
-            _require(image_path is not None, "This deployment requires an image")
+        modality = self.deployment.input_modality
+        if modality == "image_only":
+            _require(xic_signal is None, "Image-only deployment must not receive XIC values")
+            _require(image_path is not None, "Image-only deployment requires an image")
+            signal: Sequence[float] = ()
         else:
-            _require(image_path is None, "XIC-only deployment must not receive image pixels")
+            _require(xic_signal is not None, "This deployment requires XIC values")
+            _require(self.deployment.projector_spec is not None, "Missing projector spec")
+            _require(
+                len(xic_signal) == self.deployment.projector_spec.input_points,
+                "XIC signal length does not match deployment",
+            )
+            _require(
+                all(
+                    isinstance(value, (int, float))
+                    and not isinstance(value, bool)
+                    and math.isfinite(float(value))
+                    for value in xic_signal
+                ),
+                "XIC signal must contain finite numbers",
+            )
+            _require(
+                all(0.0 <= float(value) <= 1.0 for value in xic_signal),
+                "XIC signal must be normalized to [0, 1]",
+            )
+            signal = xic_signal
+            if modality == "image_xic":
+                _require(image_path is not None, "Image/XIC deployment requires an image")
+            else:
+                _require(image_path is None, "XIC-only deployment must not receive image pixels")
         prompt = build_task_prompt(
             task, language, width=image_width, height=image_height, metadata=metadata
         )
         with self._lock:
             backend = self._get_backend()
-            raw = backend.generate(prompt, xic_signal, xic_available, image_path)
+            raw = backend.generate(prompt, signal, xic_available, image_path)
         result = validate_task_output(task, raw, image_width, image_height)
         return {
             "deployment_id": self.deployment.deployment_id,

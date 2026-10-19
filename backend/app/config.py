@@ -73,6 +73,9 @@ class Settings(BaseSettings):
     attachment_pdf_vision_pages: int = 4
     chromatogram_tool_enabled: bool = False
     chromatogram_deployment_manifest_path: Path | None = None
+    chromatogram_xic_only_manifest_path: Path | None = None
+    chromatogram_image_xic_manifest_path: Path | None = None
+    chromatogram_image_only_manifest_path: Path | None = None
     chromatogram_tool_timeout_seconds: float = 300.0
     knowledge_exclude_files: str = "demo_knowledge.md"
     history_db_path: Path = BACKEND_ROOT / "data" / "bioagent.db"
